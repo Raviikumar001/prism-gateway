@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,35 +41,35 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "key is required")
 		return
 	}
-	month := r.URL.Query().Get("month")
-	if month == "" {
-		month = time.Now().UTC().Format("200601")
+
+	window, err := parseUsageWindow(r.URL.Query(), time.Now().UTC())
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
 	}
 
 	var requests, prompt, completion, cost, hits int64
-	err := s.db.QueryRow(r.Context(), `
-		SELECT requests, prompt_tokens, completion_tokens, cost_micro_cents, cache_hits
-		FROM usage_monthly WHERE virtual_key = $1 AND month = $2
-	`, key, month).Scan(&requests, &prompt, &completion, &cost, &hits)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"virtual_key":       key,
-			"month":             month,
-			"requests":          0,
-			"prompt_tokens":     0,
-			"completion_tokens": 0,
-			"cost_usd":          "0.0",
-			"cache_hits":        0,
-		})
-		return
-	}
-	if err != nil {
+	err = s.db.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(requests), 0),
+		       COALESCE(SUM(prompt_tokens), 0),
+		       COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(cost_micro_cents), 0),
+		       COALESCE(SUM(cache_hits), 0)
+		FROM usage_monthly
+		WHERE virtual_key = $1 AND month = ANY($2)
+	`, key, window.Months).Scan(&requests, &prompt, &completion, &cost, &hits)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not load usage")
 		return
 	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
+		"key":               key,
 		"virtual_key":       key,
-		"month":             month,
+		"from":              window.From.Format("2006-01-02"),
+		"to":                window.To.Format("2006-01-02"),
+		"month":             window.PrimaryMonth,
+		"months":            window.Months,
 		"requests":          requests,
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
@@ -74,6 +77,110 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		"cost_usd":          trimCost(meter.FormatUSD(float64(cost) / 100_000_000.0)),
 		"cache_hits":        hits,
 	})
+}
+
+type usageWindow struct {
+	From         time.Time
+	To           time.Time
+	Months       []string
+	PrimaryMonth string
+}
+
+func parseUsageWindow(q url.Values, now time.Time) (usageWindow, error) {
+	now = now.UTC()
+	month := strings.TrimSpace(q.Get("month"))
+	fromRaw := strings.TrimSpace(q.Get("from"))
+	toRaw := strings.TrimSpace(q.Get("to"))
+
+	if month != "" && (fromRaw != "" || toRaw != "") {
+		return usageWindow{}, fmt.Errorf("use either month or from/to, not both")
+	}
+
+	if month != "" {
+		start, err := parseMonthStart(month)
+		if err != nil {
+			return usageWindow{}, err
+		}
+		end := start.AddDate(0, 1, 0).Add(-time.Nanosecond)
+		m := start.Format("200601")
+		return usageWindow{From: start, To: end, Months: []string{m}, PrimaryMonth: m}, nil
+	}
+
+	if fromRaw == "" && toRaw == "" {
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(0, 1, 0).Add(-time.Nanosecond)
+		m := start.Format("200601")
+		return usageWindow{From: start, To: end, Months: []string{m}, PrimaryMonth: m}, nil
+	}
+
+	if fromRaw == "" || toRaw == "" {
+		return usageWindow{}, fmt.Errorf("from and to are both required")
+	}
+
+	from, err := parseUsageDate(fromRaw, false)
+	if err != nil {
+		return usageWindow{}, fmt.Errorf("invalid from: %w", err)
+	}
+	to, err := parseUsageDate(toRaw, true)
+	if err != nil {
+		return usageWindow{}, fmt.Errorf("invalid to: %w", err)
+	}
+	if to.Before(from) {
+		return usageWindow{}, fmt.Errorf("to must be on or after from")
+	}
+
+	months := monthsInclusive(from, to)
+	return usageWindow{
+		From:         from,
+		To:           to,
+		Months:       months,
+		PrimaryMonth: months[0],
+	}, nil
+}
+
+func parseMonthStart(month string) (time.Time, error) {
+	if len(month) != 6 {
+		return time.Time{}, fmt.Errorf("month must be YYYYMM")
+	}
+	t, err := time.ParseInLocation("200601", month, time.UTC)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("month must be YYYYMM")
+	}
+	return t, nil
+}
+
+func parseUsageDate(raw string, endOfDay bool) (time.Time, error) {
+	if len(raw) == 6 && raw[0] >= '0' && raw[0] <= '9' {
+		start, err := parseMonthStart(raw)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if endOfDay {
+			return start.AddDate(0, 1, 0).Add(-time.Nanosecond), nil
+		}
+		return start, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02", raw, time.UTC); err == nil {
+		if endOfDay {
+			return t.Add(24*time.Hour - time.Nanosecond), nil
+		}
+		return t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("expected YYYY-MM-DD, YYYYMM, or RFC3339")
+}
+
+func monthsInclusive(from, to time.Time) []string {
+	cur := time.Date(from.Year(), from.Month(), 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(to.Year(), to.Month(), 1, 0, 0, 0, 0, time.UTC)
+	out := make([]string, 0, 4)
+	for !cur.After(end) {
+		out = append(out, cur.Format("200601"))
+		cur = cur.AddDate(0, 1, 0)
+	}
+	return out
 }
 
 func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +194,8 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 
 	q := `
 		SELECT request_id, virtual_key, requested_model, COALESCE(resolved_provider,''), COALESCE(resolved_model,''),
-		       status, prompt_tokens, completion_tokens, cost_micro_cents, cache, fallback, latency_ms, created_at
+		       status, prompt_tokens, completion_tokens, cost_micro_cents, cache, fallback,
+		       COALESCE(route_reason,''), retries, latency_ms, created_at
 		FROM request_logs`
 	args := []any{}
 	if key != "" {
@@ -117,6 +225,8 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		CostMicroCents   int64     `json:"cost_micro_cents"`
 		Cache            string    `json:"cache"`
 		Fallback         bool      `json:"fallback"`
+		RouteReason      string    `json:"route_reason"`
+		Retries          int       `json:"retries"`
 		LatencyMs        int       `json:"latency_ms"`
 		CreatedAt        time.Time `json:"created_at"`
 	}
@@ -125,7 +235,8 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		var item row
 		if err := rows.Scan(
 			&item.RequestID, &item.VirtualKey, &item.RequestedModel, &item.ResolvedProvider, &item.ResolvedModel,
-			&item.Status, &item.PromptTokens, &item.CompletionTokens, &item.CostMicroCents, &item.Cache, &item.Fallback, &item.LatencyMs, &item.CreatedAt,
+			&item.Status, &item.PromptTokens, &item.CompletionTokens, &item.CostMicroCents, &item.Cache, &item.Fallback,
+			&item.RouteReason, &item.Retries, &item.LatencyMs, &item.CreatedAt,
 		); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not scan logs")
 			return

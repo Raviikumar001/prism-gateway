@@ -172,20 +172,58 @@ def main():
     record("unrelated prompt is a cache miss", headers.get("x-prism-cache") == "miss",
            headers.get("x-prism-cache", "missing"))
 
+    print("\n[7b] Semantic cache: time-sensitive prompts stay uncached")
+    fresh = "What is the current status of the payments service?"
+    post_chat(args.url, args.key, simple_body(args.model, fresh))
+    status, headers, _ = post_chat(args.url, args.key, simple_body(args.model, fresh))
+    record("time-sensitive repeat is a cache miss", headers.get("x-prism-cache") == "miss",
+           headers.get("x-prism-cache", "missing"))
+
     if args.admin_token:
         print("\n[8] Admin + console")
-        for path, name in (
-            ("/admin/providers/health", "providers health"),
-            ("/admin/cache/stats", "cache stats"),
-            (f"/admin/usage?key={args.key}", "usage"),
-            (f"/admin/logs?key={args.key}&limit=5", "logs"),
-            ("/console/", "ops console HTML"),
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        month_start = now.strftime("%Y-%m-01")        for path, name, check in (
+            ("/admin/providers/health", "providers health", None),
+            ("/admin/cache/stats", "cache stats", None),
+            (f"/admin/usage?key={args.key}&from={month_start}&to={today}", "usage from/to", "usage"),
+            (f"/admin/logs?key={args.key}&limit=5", "logs", "logs"),
+            ("/console/", "ops console HTML", "html"),
         ):
-            code, ctype, body = get(args.url, path, args.admin_token)
-            if name == "ops console HTML":
+            code, _hdrs, body = get(args.url, path, args.admin_token)
+            if check == "html":
                 record(name, code == 200 and "Prism Ops" in str(body), f"got {code}")
+            elif check == "usage":
+                ok = (
+                    code == 200
+                    and isinstance(body, dict)
+                    and bool(body.get("from"))
+                    and bool(body.get("to"))
+                    and "requests" in body
+                )
+                detail = f"got {code}"
+                if isinstance(body, dict):
+                    detail += f" from={body.get('from')} to={body.get('to')}"
+                record(name, ok, detail)
+            elif check == "logs":
+                ok = code == 200 and isinstance(body, dict) and isinstance(body.get("logs"), list)
+                if ok and body["logs"]:
+                    sample = body["logs"][0]
+                    ok = "route_reason" in sample and "retries" in sample
+                record(name, ok, f"got {code}")
             else:
                 record(name, code == 200 and isinstance(body, dict), f"got {code}")
+        print("\n[8b] Rejection logging")
+        post_chat(args.url, "prism-sk-invalid-key", simple_body(args.model, "hello"))
+        post_chat(args.url, args.key, {"model": args.model, "messages": []})
+        import time as _time
+        _time.sleep(0.8)
+        code, _, body = get(args.url, "/admin/logs?limit=20", args.admin_token)
+        statuses = {row.get("status") for row in (body.get("logs") or [])} if isinstance(body, dict) else set()
+        record("invalid auth is logged", "rejected_auth" in statuses, f"statuses={sorted(statuses)[:8]}")
+        record("malformed request is logged", "rejected_malformed" in statuses,
+               f"statuses={sorted(statuses)[:8]}")
 
     if args.check_failover:
         print("\n[9] Failover drill (mock alpha down)")

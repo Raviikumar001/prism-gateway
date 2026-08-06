@@ -63,6 +63,8 @@
 
   function renderUsage(data) {
     const items = [
+      ["From", data.from ?? "—"],
+      ["To", data.to ?? "—"],
       ["Month", data.month ?? "—"],
       ["Requests", data.requests ?? 0],
       ["Prompt tok", data.prompt_tokens ?? 0],
@@ -79,7 +81,7 @@
     const rows = data.logs || [];
     const tbody = el("logs");
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="8">No logs yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10">No logs yet.</td></tr>`;
       return;
     }
     tbody.innerHTML = rows
@@ -93,6 +95,8 @@
           <td>${escapeHtml(prov)}</td>
           <td>${escapeHtml(r.cache || "")}</td>
           <td>${r.fallback ? "true" : "false"}</td>
+          <td>${escapeHtml(r.route_reason || "—")}</td>
+          <td>${r.retries ?? 0}</td>
           <td>${r.cost_micro_cents ?? 0}</td>
           <td>${r.latency_ms ?? 0}</td>
         </tr>`;

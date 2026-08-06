@@ -185,12 +185,17 @@ func (m ChatMessage) TextContent() (string, bool) {
 
 // CacheVariant allows semantic caching only for a single, text-only user
 // message with no tools. It includes generation controls so incompatible
-// response shapes or output limits cannot collide.
+// response shapes or output limits cannot collide. Time-sensitive prompts
+// (e.g. "current status…") are excluded so stale answers cannot be served.
 func (r ChatRequest) CacheVariant() (string, bool) {
 	if len(r.Messages) != 1 || !strings.EqualFold(r.Messages[0].Role, "user") {
 		return "", false
 	}
-	if _, ok := r.Messages[0].TextContent(); !ok {
+	text, ok := r.Messages[0].TextContent()
+	if !ok {
+		return "", false
+	}
+	if isTimeSensitivePrompt(text) {
 		return "", false
 	}
 	for _, key := range []string{
@@ -214,6 +219,32 @@ func (r ChatRequest) CacheVariant() (string, bool) {
 		return "", false
 	}
 	return string(encoded), true
+}
+
+var timeSensitiveMarkers = []string{
+	"current status",
+	"currently",
+	"right now",
+	"at this moment",
+	"as of today",
+	"as of now",
+	"live status",
+	"latest status",
+	"what's happening now",
+	"what is happening now",
+	"up to date",
+	"real-time",
+	"realtime",
+}
+
+func isTimeSensitivePrompt(text string) bool {
+	lower := strings.ToLower(text)
+	for _, marker := range timeSensitiveMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type Usage struct {

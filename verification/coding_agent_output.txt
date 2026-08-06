@@ -1,0 +1,6 @@
+PASS model discovery (23 visible models)
+PASS model retrieve
+PASS non-stream tool call
+PASS tool-result continuation
+PASS streaming tool deltas and [DONE]
+PASS max_tokens passthrough

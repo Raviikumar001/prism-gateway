@@ -23,24 +23,36 @@ import (
 
 const maxChatRequestBytes = 8 << 20
 
+const unauthenticatedKey = "_unauthenticated"
+
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ctx := r.Context()
 
 	token, err := auth.BearerToken(r.Header.Get("Authorization"))
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "authentication_error", "Missing or invalid Authorization bearer token")
+		s.rejectAndLog(w, start, http.StatusUnauthorized, "authentication_error",
+			"Missing or invalid Authorization bearer token", logEntry{
+				VirtualKey: unauthenticatedKey,
+				Status:     "rejected_auth",
+			})
 		return
 	}
 
 	tenant, err := s.auth.Lookup(ctx, token)
 	if errors.Is(err, auth.ErrInvalidKey) || errors.Is(err, auth.ErrDisabled) {
-		writeAPIError(w, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		s.rejectAndLog(w, start, http.StatusUnauthorized, "authentication_error", "Invalid API key", logEntry{
+			VirtualKey: unauthenticatedKey,
+			Status:     "rejected_auth",
+		})
 		return
 	}
 	if err != nil {
 		slog.Error("tenant lookup failed", "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "Internal error")
+		s.rejectAndLog(w, start, http.StatusInternalServerError, "server_error", "Internal error", logEntry{
+			VirtualKey: unauthenticatedKey,
+			Status:     "auth_lookup_failed",
+		})
 		return
 	}
 
@@ -49,23 +61,41 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "Request body exceeds 8 MiB")
+			s.rejectAndLog(w, start, http.StatusRequestEntityTooLarge, "invalid_request_error",
+				"Request body exceeds 8 MiB", logEntry{
+					VirtualKey: tenant.VirtualKey,
+					Status:     "rejected_malformed",
+				})
 			return
 		}
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "Could not read body")
+		s.rejectAndLog(w, start, http.StatusBadRequest, "invalid_request_error", "Could not read body", logEntry{
+			VirtualKey: tenant.VirtualKey,
+			Status:     "rejected_malformed",
+		})
 		return
 	}
 	body, err := provider.ParseChatRequest(raw)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "Request body is not valid JSON")
+		s.rejectAndLog(w, start, http.StatusBadRequest, "invalid_request_error",
+			"Request body is not valid JSON", logEntry{
+				VirtualKey: tenant.VirtualKey,
+				Status:     "rejected_malformed",
+			})
 		return
 	}
 	if body.Model == "" {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
+		s.rejectAndLog(w, start, http.StatusBadRequest, "invalid_request_error", "model is required", logEntry{
+			VirtualKey: tenant.VirtualKey,
+			Status:     "rejected_malformed",
+		})
 		return
 	}
 	if len(body.Messages) == 0 {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "messages is required")
+		s.rejectAndLog(w, start, http.StatusBadRequest, "invalid_request_error", "messages is required", logEntry{
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			Status:         "rejected_malformed",
+		})
 		return
 	}
 
@@ -583,6 +613,21 @@ func trimCost(s string) string {
 		s += "0"
 	}
 	return s
+}
+
+func (s *Server) rejectAndLog(w http.ResponseWriter, start time.Time, statusCode int, typ, message string, e logEntry) {
+	writeAPIError(w, statusCode, typ, message)
+	if e.RequestID == "" {
+		e.RequestID = uuid.NewString()
+	}
+	if e.VirtualKey == "" {
+		e.VirtualKey = unauthenticatedKey
+	}
+	if e.Cache == "" {
+		e.Cache = "miss"
+	}
+	e.LatencyMs = int(time.Since(start).Milliseconds())
+	s.logger.Enqueue(e)
 }
 
 func responseModel(body json.RawMessage, fallback string) string {

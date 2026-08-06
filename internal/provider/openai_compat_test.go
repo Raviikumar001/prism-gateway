@@ -122,6 +122,17 @@ func TestCacheVariantRejectsAgenticAndMultiTurnRequests(t *testing.T) {
 	if _, ok := multiTurn.CacheVariant(); ok {
 		t.Fatal("multi-turn request must bypass semantic cache")
 	}
+
+	fresh, err := ParseChatRequest([]byte(`{
+		"model":"fast",
+		"messages":[{"role":"user","content":"What is the current status of the payments service?"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fresh.CacheVariant(); ok {
+		t.Fatal("time-sensitive prompt must bypass semantic cache")
+	}
 }
 
 func TestChatRequestValidatesAndBoundsCompletionLimit(t *testing.T) {

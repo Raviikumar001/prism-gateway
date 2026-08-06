@@ -1,0 +1,209 @@
+{
+  "cases": [
+    {
+      "id": "route_001",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-simple_fact → fast",
+      "note": "short, easy fact"
+    },
+    {
+      "id": "route_002",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-translate → fast",
+      "note": "short, easy conversion"
+    },
+    {
+      "id": "route_003",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-one_line → fast",
+      "note": "short, easy writing"
+    },
+    {
+      "id": "route_004",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-simple_fact → fast",
+      "note": "short, easy definition"
+    },
+    {
+      "id": "route_005",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-translate → fast",
+      "note": "short, easy translation"
+    },
+    {
+      "id": "route_006",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "smart",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.00 threshold=0.65 signals=-roster,-long_trivial → fast",
+      "note": "trap: long input, trivial lookup task"
+    },
+    {
+      "id": "route_007",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "smart",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.00 threshold=0.65 signals=-extract_log → fast",
+      "note": "trap: long input, trivial extraction task"
+    },
+    {
+      "id": "route_008",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-extract_log → fast",
+      "note": "short, easy extraction"
+    },
+    {
+      "id": "route_009",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-simple_fact → fast",
+      "note": "short, easy arithmetic"
+    },
+    {
+      "id": "route_010",
+      "expected_tier": "fast",
+      "feature_tier": "fast",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": true,
+      "route_reason": "score=0.00 threshold=0.65 signals=-one_line → fast",
+      "note": "trap: longer input, trivial rewrite task"
+    },
+    {
+      "id": "route_011",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.75 threshold=0.65 signals=+proof → smart",
+      "note": "trap: short but hard proof"
+    },
+    {
+      "id": "route_012",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.70 threshold=0.65 signals=+fermi → smart",
+      "note": "trap: short but multi-step estimation"
+    },
+    {
+      "id": "route_013",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=1.00 threshold=0.65 signals=+systems,+debug_expert,+deep_why → smart",
+      "note": "trap: short but deep systems reasoning"
+    },
+    {
+      "id": "route_014",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=1.00 threshold=0.65 signals=+design_heavy,+compare_reco → smart",
+      "note": "complex design task"
+    },
+    {
+      "id": "route_015",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=1.00 threshold=0.65 signals=+design_heavy,+compare_reco → smart",
+      "note": "complex comparison and recommendation"
+    },
+    {
+      "id": "route_016",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.70 threshold=0.65 signals=+algo_hard → smart",
+      "note": "hard algorithm with explanation"
+    },
+    {
+      "id": "route_017",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.65 threshold=0.65 signals=+systems → smart",
+      "note": "deep distributed-systems question"
+    },
+    {
+      "id": "route_018",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.70 threshold=0.65 signals=+design_heavy → smart",
+      "note": "complex planning task"
+    },
+    {
+      "id": "route_019",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=1.00 threshold=0.65 signals=+systems,+debug_expert → smart",
+      "note": "trap: shortish but expert debugging"
+    },
+    {
+      "id": "route_020",
+      "expected_tier": "smart",
+      "feature_tier": "smart",
+      "length_tier": "fast",
+      "feature_correct": true,
+      "length_correct": false,
+      "route_reason": "score=0.75 threshold=0.65 signals=+proof → smart",
+      "note": "trap: short but requires a proof"
+    }
+  ],
+  "feature_accuracy": 1,
+  "feature_correct": 20,
+  "length_accuracy": 0.4,
+  "length_correct": 8,
+  "total": 20
+}

@@ -152,10 +152,13 @@ python3 scripts/coding_agent_test.py \
 | Method | Path | Auth |
 |---|---|---|
 | `GET` | `/admin/usage?key=&from=&to=` | admin token |
+| `GET` | `/admin/usage?key=&month=YYYYMM` | admin token (legacy single-month) |
 | `GET` | `/admin/logs?key=&limit=` | admin token |
 | `GET` | `/admin/cache/stats` | admin token |
 | `GET` | `/admin/providers/health` | admin token |
 | `GET` | `/console/` | HTML UI (APIs still need admin token) |
+
+`from` / `to` accept `YYYY-MM-DD`, `YYYYMM`, or RFC3339. When omitted, usage defaults to the current UTC calendar month. The response includes `from`, `to`, `month`, aggregated token/cost totals, and `cache_hits`. Logs include `route_reason` and `retries`.
 
 Admin auth: `Authorization: Bearer <ADMIN_TOKEN>`.
 
@@ -185,6 +188,8 @@ Environment (see `.env.example`):
 | `GATEWAY_CONFIG` | Optional override; live defaults to `gateway_config.live.json` under `DATA_DIR` |
 | `CEREBRAS_API_KEY` | Required when `PROVIDER_MODE=live` |
 | `OPENROUTER_API_KEY` | Required when `PROVIDER_MODE=live` |
+
+Per-key quotas (seeded in Postgres): `monthly_budget_usd`, RPM, **TPM** (tokens/minute), model allowlist, and semantic-cache threshold. RPM and TPM are both enforced before dispatch.
 
 ## Deploy on Railway
 
@@ -223,7 +228,7 @@ Request path:
 1. Authenticate virtual key
 2. Allowlist → RPM / TPM
 3. Resolve alias (`auto` uses feature-weighted difficulty)
-4. Cache (exact hash, then semantic)
+4. Cache (exact hash, then semantic; skipped for tools, multi-turn, and time-sensitive prompts)
 5. **Budget reserve** using the output cap and most expensive fallback
 6. Upstream with timeout / retry+jitter / **circuit breaker** / cross-vendor failover
 7. Stream or return; meter from provider `usage`; **settle reservation**
@@ -250,6 +255,8 @@ python3 scripts/load_test.py  --url http://localhost:8080 --key prism-sk-free-7g
 ```
 
 Local planning notes (gitignored): `docs/BUILD_PLAN.md`, `docs/PROVIDERS.md`, `docs/CONFIGURATION.md`.
+
+Verification artifacts and the assignment report: [`VERIFICATION.md`](VERIFICATION.md), [`DEMO.md`](DEMO.md), [`verification/`](verification/).
 
 ## License
 
