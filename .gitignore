@@ -1,0 +1,44 @@
+# Binaries / build
+/bin/
+/dist/
+/tmp/
+*.exe
+*.test
+/prism
+/cmd/prism/prism
+
+# Go
+vendor/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Node (ops console)
+node_modules/
+web/dist/
+
+# Python mocks / scripts
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local DBs
+*.sqlite
+*.db
+*.db-journal
+
+# Coverage / logs
+coverage.out
+*.log
+
+# Local planning notes (not part of the product repo)
+/docs/
+/pack-reference/
