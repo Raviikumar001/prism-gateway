@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -10,17 +9,41 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/config"
+	"github.com/raviikumar001/prism-gateway/internal/meter"
+	"github.com/raviikumar001/prism-gateway/internal/provider"
+	"github.com/raviikumar001/prism-gateway/internal/route"
 )
 
 type Server struct {
-	cfg *config.Config
-	db  *pgxpool.Pool
-	rdb *redis.Client
+	cfg       *config.Config
+	db        *pgxpool.Pool
+	rdb       *redis.Client
+	auth      *auth.Service
+	resolver  *route.Resolver
+	providers *provider.Registry
+	meter     *meter.Service
 }
 
-func NewServer(cfg *config.Config, db *pgxpool.Pool, rdb *redis.Client) *Server {
-	return &Server{cfg: cfg, db: db, rdb: rdb}
+func NewServer(
+	cfg *config.Config,
+	db *pgxpool.Pool,
+	rdb *redis.Client,
+	authSvc *auth.Service,
+	resolver *route.Resolver,
+	providers *provider.Registry,
+	meterSvc *meter.Service,
+) *Server {
+	return &Server{
+		cfg:       cfg,
+		db:        db,
+		rdb:       rdb,
+		auth:      authSvc,
+		resolver:  resolver,
+		providers: providers,
+		meter:     meterSvc,
+	}
 }
 
 func (s *Server) Router() http.Handler {
@@ -31,6 +54,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Timeout(120 * time.Second))
 
 	r.Get("/health", s.handleHealth)
+	r.Post("/v1/chat/completions", s.handleChatCompletions)
 
 	return r
 }
@@ -42,9 +66,7 @@ type healthResponse struct {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-
+	ctx := r.Context()
 	checks := map[string]string{}
 	ok := true
 

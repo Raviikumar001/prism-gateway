@@ -9,8 +9,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/config"
+	"github.com/raviikumar001/prism-gateway/internal/gatewaycfg"
 	"github.com/raviikumar001/prism-gateway/internal/httpapi"
+	"github.com/raviikumar001/prism-gateway/internal/meter"
+	"github.com/raviikumar001/prism-gateway/internal/provider"
+	"github.com/raviikumar001/prism-gateway/internal/route"
 	"github.com/raviikumar001/prism-gateway/internal/store"
 )
 
@@ -53,7 +58,18 @@ func main() {
 		}
 	}
 
-	srv := httpapi.NewServer(cfg, db, rdb)
+	gwCfg, err := gatewaycfg.Load(cfg.GatewayConfig)
+	if err != nil {
+		slog.Error("gateway config load failed", "err", err)
+		os.Exit(1)
+	}
+
+	authSvc := auth.NewService(db)
+	resolver := route.NewResolver(gwCfg)
+	providers := provider.NewRegistry(gwCfg, 30*time.Second)
+	meterSvc := meter.NewService(db)
+
+	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, providers, meterSvc)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),
@@ -61,7 +77,11 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("prism listening", "addr", httpServer.Addr, "provider_mode", cfg.ProviderMode)
+		slog.Info("prism listening",
+			"addr", httpServer.Addr,
+			"provider_mode", cfg.ProviderMode,
+			"gateway_config", cfg.GatewayConfig,
+		)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server failed", "err", err)
 			os.Exit(1)

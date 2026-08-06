@@ -11,16 +11,17 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	RedisURL       string
-	AdminToken     string
-	ProviderMode   string
-	DataDir        string
-	SeedOnBoot     bool
-	LogLevel       slog.Level
-	CerebrasKey    string
-	OpenRouterKey  string
+	Port          string
+	DatabaseURL   string
+	RedisURL      string
+	AdminToken    string
+	ProviderMode  string
+	DataDir       string
+	GatewayConfig string
+	SeedOnBoot    bool
+	LogLevel      slog.Level
+	CerebrasKey   string
+	OpenRouterKey string
 }
 
 func Load() (*Config, error) {
@@ -33,6 +34,7 @@ func Load() (*Config, error) {
 		AdminToken:    getenv("ADMIN_TOKEN", "dev-admin-change-me"),
 		ProviderMode:  strings.ToLower(getenv("PROVIDER_MODE", "mocks")),
 		DataDir:       getenv("DATA_DIR", "data"),
+		GatewayConfig: getenv("GATEWAY_CONFIG", "data/gateway_config.sample.json"),
 		SeedOnBoot:    getenvBool("SEED_ON_BOOT", true),
 		CerebrasKey:   os.Getenv("CEREBRAS_API_KEY"),
 		OpenRouterKey: os.Getenv("OPENROUTER_API_KEY"),

@@ -1,0 +1,15 @@
+{
+  "_comment": "Docker Compose provider endpoints (service DNS names).",
+  "providers": [
+    { "name": "alpha", "base_url": "http://mock-alpha:9001/v1", "api_key": "mock-key-alpha" },
+    { "name": "beta",  "base_url": "http://mock-beta:9002/v1", "api_key": "mock-key-beta" }
+  ],
+  "model_aliases": {
+    "fast":  { "primary": "alpha-small", "fallbacks": ["beta-small"] },
+    "smart": { "primary": "alpha-large", "fallbacks": ["beta-large"] },
+    "auto":  {
+      "route_by_difficulty": { "simple": "fast", "complex": "smart" }
+    }
+  },
+  "retry": { "max_attempts": 3, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
+}

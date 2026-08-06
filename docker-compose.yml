@@ -55,6 +55,7 @@ services:
       PROVIDER_MODE: mocks
       SEED_ON_BOOT: "true"
       DATA_DIR: /data
+      GATEWAY_CONFIG: /data/gateway_config.docker.json
       LOG_LEVEL: info
     depends_on:
       postgres:
