@@ -14,7 +14,7 @@
       "virtual_key": "prism-sk-research-4d5e6f",
       "monthly_budget_usd": 500,
       "rate_limit": { "requests_per_minute": 300, "tokens_per_minute": 1000000 },
-      "model_allowlist": ["fast", "smart", "auto"],
+      "model_allowlist": ["fast", "smart", "auto", "*"],
       "semantic_cache": { "enabled": false }
     },
     {

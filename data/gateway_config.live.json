@@ -1,5 +1,5 @@
 {
-  "_comment": "Live providers: only active Cerebras Cloud models (+ OpenRouter twins). No archived/deprecated IDs.",
+  "_comment": "Live providers: Cerebras active models + curated OpenRouter mix (cheap OSS + Google/OpenAI/Anthropic).",
   "providers": [
     {
       "name": "cerebras",
@@ -11,7 +11,28 @@
       "name": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
-      "models": ["google/gemma-4-31b-it", "openai/gpt-oss-120b", "z-ai/glm-4.7"],
+      "models": [
+        "mistralai/mistral-nemo",
+        "meta-llama/llama-3.1-8b-instruct",
+        "google/gemma-3-4b-it",
+        "google/gemma-3-12b-it",
+        "google/gemma-4-31b-it",
+        "openai/gpt-4.1-nano",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1-mini",
+        "openai/gpt-4o",
+        "openai/gpt-oss-120b",
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-sonnet-4",
+        "meta-llama/llama-3.3-70b-instruct",
+        "deepseek/deepseek-chat-v3-0324",
+        "mistralai/mistral-small-3.1-24b-instruct",
+        "z-ai/glm-4.7"
+      ],
       "extra_headers": {
         "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
         "X-OpenRouter-Title": "Prism Gateway"
@@ -20,12 +41,23 @@
   ],
   "model_aliases": {
     "fast": {
-      "primary": "google/gemma-4-31b-it",
-      "fallbacks": ["gemma-4-31b"]
+      "primary": "mistralai/mistral-nemo",
+      "fallbacks": [
+        "meta-llama/llama-3.1-8b-instruct",
+        "google/gemma-3-4b-it",
+        "openai/gpt-4.1-nano",
+        "gemma-4-31b"
+      ]
     },
     "smart": {
       "primary": "gpt-oss-120b",
-      "fallbacks": ["openai/gpt-oss-120b"]
+      "fallbacks": [
+        "openai/gpt-oss-120b",
+        "google/gemini-2.5-flash",
+        "openai/gpt-4o-mini",
+        "anthropic/claude-3-haiku",
+        "meta-llama/llama-3.3-70b-instruct"
+      ]
     },
     "auto": {
       "route_by_difficulty": { "simple": "fast", "complex": "smart" }

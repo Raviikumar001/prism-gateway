@@ -82,13 +82,13 @@ OPENROUTER_API_KEY=...
 
 With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/gateway_config.live.json`:
 
-| Alias | Primary | Fallback |
+| Alias | Primary | Fallbacks |
 |---|---|---|
-| `fast` | OpenRouter `google/gemma-4-31b-it` | Cerebras `gemma-4-31b` |
-| `smart` | Cerebras `gpt-oss-120b` | OpenRouter `openai/gpt-oss-120b` |
+| `fast` | OpenRouter `mistralai/mistral-nemo` (cheap) | Llama 3.1 8B → Gemma 3 4B → GPT-4.1 nano → Cerebras Gemma 4 31B |
+| `smart` | Cerebras `gpt-oss-120b` | OpenRouter GPT OSS → Gemini 2.5 Flash → GPT-4o mini → Claude 3 Haiku → Llama 3.3 70B |
 | `auto` | difficulty → `fast` (simple) / `smart` (complex) | same chains as above |
 
-Live model IDs are limited to Cerebras Cloud **active** models and their OpenRouter twins (`gemma-4-31b`, `gpt-oss-120b`, `zai-glm-4.7`). Archived Cerebras models (Llama 3.1 8B, Qwen 3 235B) are not used.
+Live OpenRouter base URL: `https://openrouter.ai/api/v1`. We do **not** expose the full OpenRouter catalog — a curated mix (~20 models) covering cheap OSS plus Google / OpenAI / Anthropic. Research key allowlist includes `*` so those model IDs can be requested directly.
 
 Run against Compose Postgres/Redis without mocks:
 

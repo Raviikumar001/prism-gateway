@@ -14,6 +14,10 @@ func TestAllowsModel(t *testing.T) {
 	if tn.AllowsModel("smart") {
 		t.Fatal("expected smart denied")
 	}
+	star := &auth.Tenant{Allowlist: []string{"*"}}
+	if !star.AllowsModel("openai/gpt-4o-mini") {
+		t.Fatal("expected wildcard to allow any model id")
+	}
 }
 
 func TestBearerToken(t *testing.T) {

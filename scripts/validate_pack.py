@@ -119,6 +119,8 @@ def main():
             raise ValueError(f"Duplicate virtual key: {tenant['virtual_key']}")
         keys_seen.add(tenant["virtual_key"])
         for allowed in tenant["model_allowlist"]:
+            if allowed == "*":
+                continue
             if allowed not in aliases and allowed not in priced_models:
                 raise ValueError(f"Tenant '{tenant['team']}' allowlists unknown model/alias '{allowed}'")
         cache = tenant["semantic_cache"]

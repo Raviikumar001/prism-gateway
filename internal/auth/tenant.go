@@ -75,7 +75,7 @@ func (s *Service) Lookup(ctx context.Context, virtualKey string) (*Tenant, error
 
 func (t *Tenant) AllowsModel(model string) bool {
 	for _, m := range t.Allowlist {
-		if m == model {
+		if m == "*" || m == model {
 			return true
 		}
 	}
