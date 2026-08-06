@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/raviikumar001/prism-gateway/internal/auth"
+	"github.com/raviikumar001/prism-gateway/internal/budget"
 	"github.com/raviikumar001/prism-gateway/internal/config"
+	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
 	"github.com/raviikumar001/prism-gateway/internal/route"
@@ -24,6 +26,9 @@ type Server struct {
 	resolver  *route.Resolver
 	providers *provider.Registry
 	meter     *meter.Service
+	rpm       *limit.RPM
+	budget    *budget.Service
+	logger    *RequestLogger
 }
 
 func NewServer(
@@ -34,6 +39,9 @@ func NewServer(
 	resolver *route.Resolver,
 	providers *provider.Registry,
 	meterSvc *meter.Service,
+	rpm *limit.RPM,
+	budgetSvc *budget.Service,
+	logger *RequestLogger,
 ) *Server {
 	return &Server{
 		cfg:       cfg,
@@ -43,6 +51,9 @@ func NewServer(
 		resolver:  resolver,
 		providers: providers,
 		meter:     meterSvc,
+		rpm:       rpm,
+		budget:    budgetSvc,
+		logger:    logger,
 	}
 }
 
@@ -55,6 +66,7 @@ func (s *Server) Router() http.Handler {
 
 	r.Get("/health", s.handleHealth)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
+	s.mountAdmin(r)
 
 	return r
 }

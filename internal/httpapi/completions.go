@@ -6,11 +6,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/raviikumar001/prism-gateway/internal/auth"
+	"github.com/raviikumar001/prism-gateway/internal/budget"
+	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
 )
@@ -66,16 +69,31 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !tenant.AllowsModel(body.Model) {
-		// Allow concrete models only if the alias they belong to is allowlisted — phase 1:
-		// require the requested string itself to be on the allowlist (fast/smart/auto).
 		writeAPIError(w, http.StatusForbidden, "model_not_allowed", "Model is not on this key's allowlist")
-		s.logRequest(ctx, logEntry{
+		s.logger.Enqueue(logEntry{
 			RequestID:      uuid.NewString(),
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			Status:         "rejected_allowlist",
 			LatencyMs:      int(time.Since(start).Milliseconds()),
 		})
+		return
+	}
+
+	if err := s.rpm.Allow(ctx, tenant.VirtualKey, tenant.RPM); err != nil {
+		if errors.Is(err, limit.ErrRateLimited) {
+			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Requests per minute exceeded")
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				Status:         "rejected_rpm",
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
+			return
+		}
+		slog.Error("rpm check failed", "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Rate limiter unavailable")
 		return
 	}
 
@@ -98,6 +116,48 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	price, err := s.meter.Price(ctx, model)
+	if err != nil {
+		slog.Error("price lookup failed", "err", err, "model", model)
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "Pricing unavailable for model")
+		return
+	}
+
+	contents := make([]string, len(body.Messages))
+	for i, m := range body.Messages {
+		contents[i] = m.Content
+	}
+	estimate := meter.EstimateMicroCents(meter.EstimatePromptTokens(contents...), meter.ReserveCompletionTokens, price)
+	budgetLimit := int64(math.Round(tenant.MonthlyBudgetUSD * 100_000_000.0))
+
+	rsv, err := s.budget.Reserve(ctx, tenant.VirtualKey, budgetLimit, estimate)
+	if errors.Is(err, budget.ErrBudgetExceeded) {
+		writeAPIError(w, http.StatusTooManyRequests, "budget_exceeded", "Monthly budget exceeded")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			ResolvedModel:  model,
+			Status:         "rejected_budget",
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
+		return
+	}
+	if err != nil {
+		slog.Error("budget reserve failed", "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Budget service unavailable")
+		return
+	}
+
+	actualCost := int64(0)
+	defer func() {
+		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.budget.Settle(settleCtx, rsv, actualCost); err != nil {
+			slog.Error("budget settle failed", "err", err, "reservation", rsv.ID)
+		}
+	}()
+
 	upCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -108,12 +168,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ue *provider.UpstreamError
 		if errors.As(err, &ue) {
-			code := ue.StatusCode
-			if code < 400 {
-				code = http.StatusBadGateway
-			}
 			writeAPIError(w, http.StatusBadGateway, "upstream_error", ue.Message)
-			s.logRequest(ctx, logEntry{
+			s.logger.Enqueue(logEntry{
 				RequestID:        uuid.NewString(),
 				VirtualKey:       tenant.VirtualKey,
 				RequestedModel:   body.Model,
@@ -129,78 +185,72 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	price, err := s.meter.Price(ctx, model)
-	if err != nil {
-		slog.Error("price lookup failed", "err", err, "model", model)
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "Pricing unavailable for model")
-		return
-	}
 	cost := meter.CostUSD(upstream.Usage.PromptTokens, upstream.Usage.CompletionTokens, price)
-	costStr := meter.FormatUSD(cost)
+	actualCost = meter.ToMicroCents(cost)
+	costStr := trimCost(meter.FormatUSD(cost))
 
 	reqID := uuid.NewString()
 	if upstream.ID != "" {
 		reqID = upstream.ID
 	}
 
+	s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, upstream.Usage.PromptTokens, upstream.Usage.CompletionTokens, actualCost)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-prism-provider", providerName+"/"+model)
 	w.Header().Set("x-prism-cache", "miss")
 	w.Header().Set("x-prism-fallback", "false")
-	w.Header().Set("x-prism-cost-usd", trimCost(costStr))
+	w.Header().Set("x-prism-cost-usd", costStr)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(upstream.Raw)
 
-	s.logRequest(context.WithoutCancel(ctx), logEntry{
-		RequestID:         reqID,
-		VirtualKey:        tenant.VirtualKey,
-		RequestedModel:    body.Model,
-		ResolvedProvider:  providerName,
-		ResolvedModel:     model,
-		Status:            "ok",
-		PromptTokens:      upstream.Usage.PromptTokens,
-		CompletionTokens:  upstream.Usage.CompletionTokens,
-		CostMicroCents:    meter.ToMicroCents(cost),
-		Cache:             "miss",
-		Fallback:          false,
-		LatencyMs:         int(time.Since(start).Milliseconds()),
+	s.logger.Enqueue(logEntry{
+		RequestID:        reqID,
+		VirtualKey:       tenant.VirtualKey,
+		RequestedModel:   body.Model,
+		ResolvedProvider: providerName,
+		ResolvedModel:    model,
+		Status:           "ok",
+		PromptTokens:     upstream.Usage.PromptTokens,
+		CompletionTokens: upstream.Usage.CompletionTokens,
+		CostMicroCents:   actualCost,
+		Cache:            "miss",
+		Fallback:         false,
+		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
 }
 
-type logEntry struct {
-	RequestID         string
-	VirtualKey        string
-	RequestedModel    string
-	ResolvedProvider  string
-	ResolvedModel     string
-	Status            string
-	PromptTokens      int
-	CompletionTokens  int
-	CostMicroCents    int64
-	Cache             string
-	Fallback          bool
-	RouteReason       string
-	Retries           int
-	LatencyMs         int
+func (s *Server) bumpUsage(ctx context.Context, virtualKey string, prompt, completion int, costMicroCents int64) {
+	month := time.Now().UTC().Format("200601")
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO usage_monthly (virtual_key, month, requests, prompt_tokens, completion_tokens, cost_micro_cents)
+		VALUES ($1, $2, 1, $3, $4, $5)
+		ON CONFLICT (virtual_key, month) DO UPDATE SET
+			requests = usage_monthly.requests + 1,
+			prompt_tokens = usage_monthly.prompt_tokens + EXCLUDED.prompt_tokens,
+			completion_tokens = usage_monthly.completion_tokens + EXCLUDED.completion_tokens,
+			cost_micro_cents = usage_monthly.cost_micro_cents + EXCLUDED.cost_micro_cents
+	`, virtualKey, month, prompt, completion, costMicroCents)
+	if err != nil {
+		slog.Error("usage_monthly upsert failed", "err", err)
+	}
 }
 
-func (s *Server) logRequest(ctx context.Context, e logEntry) {
-	if e.Cache == "" {
-		e.Cache = "miss"
-	}
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO request_logs (
-			request_id, virtual_key, requested_model, resolved_provider, resolved_model,
-			status, prompt_tokens, completion_tokens, cost_micro_cents, cache, fallback,
-			route_reason, retries, latency_ms
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-		ON CONFLICT (request_id) DO NOTHING
-	`, e.RequestID, e.VirtualKey, e.RequestedModel, nullStr(e.ResolvedProvider), nullStr(e.ResolvedModel),
-		e.Status, e.PromptTokens, e.CompletionTokens, e.CostMicroCents, e.Cache, e.Fallback,
-		nullStr(e.RouteReason), e.Retries, e.LatencyMs)
-	if err != nil {
-		slog.Error("request log insert failed", "err", err, "request_id", e.RequestID)
-	}
+type logEntry struct {
+	RequestID        string
+	VirtualKey       string
+	RequestedModel   string
+	ResolvedProvider string
+	ResolvedModel    string
+	Status           string
+	PromptTokens     int
+	CompletionTokens int
+	CostMicroCents   int64
+	Cache            string
+	Fallback         bool
+	RouteReason      string
+	Retries          int
+	LatencyMs        int
 }
 
 func nullStr(s string) any {
@@ -211,7 +261,6 @@ func nullStr(s string) any {
 }
 
 func trimCost(s string) string {
-	// FormatUSD uses 8 decimals; trim trailing zeros but keep at least one decimal place feel.
 	for len(s) > 1 && s[len(s)-1] == '0' {
 		s = s[:len(s)-1]
 	}

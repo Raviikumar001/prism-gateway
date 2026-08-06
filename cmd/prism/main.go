@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/raviikumar001/prism-gateway/internal/auth"
+	"github.com/raviikumar001/prism-gateway/internal/budget"
 	"github.com/raviikumar001/prism-gateway/internal/config"
 	"github.com/raviikumar001/prism-gateway/internal/gatewaycfg"
 	"github.com/raviikumar001/prism-gateway/internal/httpapi"
+	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
 	"github.com/raviikumar001/prism-gateway/internal/route"
@@ -68,8 +70,13 @@ func main() {
 	resolver := route.NewResolver(gwCfg)
 	providers := provider.NewRegistry(gwCfg, 30*time.Second)
 	meterSvc := meter.NewService(db)
+	rpm := limit.NewRPM(rdb)
+	_ = rpm.EnsureScript(ctx)
+	budgetSvc := budget.NewService(rdb)
+	reqLogger := httpapi.NewRequestLogger(db)
+	defer reqLogger.Close()
 
-	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, providers, meterSvc)
+	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, providers, meterSvc, rpm, budgetSvc, reqLogger)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),
