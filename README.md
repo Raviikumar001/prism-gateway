@@ -49,7 +49,8 @@ docker compose up --build
 ```
 
 Gateway: `http://localhost:8080`  
-Health: `GET /health` (checks Postgres + Redis)
+Health: `GET /health` (checks Postgres + Redis)  
+Ops console: `http://localhost:8080/console/` (enter `ADMIN_TOKEN`)
 
 ```bash
 curl -s http://localhost:8080/health
@@ -84,6 +85,7 @@ curl -X POST http://localhost:9001/admin/config -d '{"mode":"down"}'
 | `GET` | `/admin/logs?key=&limit=` | admin token |
 | `GET` | `/admin/cache/stats` | admin token |
 | `GET` | `/admin/providers/health` | admin token |
+| `GET` | `/console/` | HTML UI (APIs still need admin token) |
 
 Admin auth: `Authorization: Bearer <ADMIN_TOKEN>`.
 
@@ -155,8 +157,12 @@ Design notes live under `docs/` locally (not committed). See `docs/ARCHITECTURE.
 # unit tests
 go test ./...
 
+# routing eval (auto classifier vs length baseline)
+go run ./cmd/routeval ./data/routing_eval.jsonl
+
 # contract / load checks against a running gateway
-python3 scripts/smoke_test.py --url http://localhost:8080 --key prism-sk-search-1a2b3c --model fast
+python3 scripts/smoke_test.py --url http://localhost:8080 --key prism-sk-search-1a2b3c --model fast \
+  --admin-token dev-admin-change-me --check-failover
 python3 scripts/load_test.py  --url http://localhost:8080 --key prism-sk-free-7g8h9i \
   --model fast --requests 30 --concurrency 10 --rpm-limit 10
 ```

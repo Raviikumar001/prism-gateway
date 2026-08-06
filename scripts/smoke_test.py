@@ -11,9 +11,12 @@ Checks the response header contract and core behaviors:
      and soft on its own, but at least one pair must hit - exact-match-only
      caching fails)
   7. an unrelated prompt is a cache miss
+  8. (optional --admin-token) admin APIs + ops console HTML respond
+  9. (optional --check-failover) alpha down → beta with x-prism-fallback
 
 Usage:
-    python3 smoke_test.py --url http://localhost:8080 --key <virtual-key> [--model fast]
+    python3 smoke_test.py --url http://localhost:8080 --key <virtual-key> [--model fast] \
+        [--admin-token dev-admin-change-me] [--check-failover]
 
 Passing this is the baseline, not the goal: it does not test budgets,
 rate limits, failover, or accounting accuracy. Those are demo/report items.
@@ -59,6 +62,34 @@ def post_chat(base, key, body, stream=False):
         return e.code, {k.lower(): v for k, v in e.headers.items()}, parsed
 
 
+def get(base, path, admin_token=""):
+    headers = {}
+    if admin_token:
+        headers["Authorization"] = f"Bearer {admin_token}"
+    req = urllib.request.Request(base.rstrip("/") + path, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode(errors="replace")
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if "json" in ctype:
+                return resp.status, {k.lower(): v for k, v in resp.headers.items()}, json.loads(raw)
+            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, raw
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        return e.code, {k.lower(): v for k, v in e.headers.items()}, raw
+
+
+def set_mock_mode(mock_base, mode):
+    req = urllib.request.Request(
+        mock_base.rstrip("/") + "/admin/config",
+        data=json.dumps({"mode": mode}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
 def simple_body(model, prompt, stream=False):
     body = {"model": model, "messages": [{"role": "user", "content": prompt}]}
     if stream:
@@ -71,6 +102,11 @@ def main():
     parser.add_argument("--url", required=True, help="gateway base URL, e.g. http://localhost:8080")
     parser.add_argument("--key", required=True, help="a valid virtual API key")
     parser.add_argument("--model", default="fast", help="a model or alias the key is allowed to use (default: fast)")
+    parser.add_argument("--admin-token", default="", help="optional ADMIN_TOKEN to verify admin + console surfaces")
+    parser.add_argument("--mock-alpha", default="http://localhost:9001",
+                        help="mock alpha base for optional failover drill")
+    parser.add_argument("--check-failover", action="store_true",
+                        help="take mock alpha down, expect x-prism-fallback: true, then restore")
     args = parser.parse_args()
 
     salt = uuid.uuid4().hex[:8]  # keeps this run's prompts out of any earlier cache
@@ -135,6 +171,37 @@ def main():
     status, headers, _ = post_chat(args.url, args.key, simple_body(args.model, unrelated))
     record("unrelated prompt is a cache miss", headers.get("x-prism-cache") == "miss",
            headers.get("x-prism-cache", "missing"))
+
+    if args.admin_token:
+        print("\n[8] Admin + console")
+        for path, name in (
+            ("/admin/providers/health", "providers health"),
+            ("/admin/cache/stats", "cache stats"),
+            (f"/admin/usage?key={args.key}", "usage"),
+            (f"/admin/logs?key={args.key}&limit=5", "logs"),
+            ("/console/", "ops console HTML"),
+        ):
+            code, ctype, body = get(args.url, path, args.admin_token)
+            if name == "ops console HTML":
+                record(name, code == 200 and "Prism Ops" in str(body), f"got {code}")
+            else:
+                record(name, code == 200 and isinstance(body, dict), f"got {code}")
+
+    if args.check_failover:
+        print("\n[9] Failover drill (mock alpha down)")
+        set_mock_mode(args.mock_alpha, "down")
+        try:
+            status, headers, _ = post_chat(
+                args.url, args.key,
+                simple_body(args.model, f"({salt}) failover probe please"),
+            )
+            record("failover returns 200", status == 200, f"got {status}")
+            record("x-prism-fallback is true", headers.get("x-prism-fallback") == "true",
+                   headers.get("x-prism-fallback", "missing"))
+            record("served by beta", "beta" in headers.get("x-prism-provider", ""),
+                   headers.get("x-prism-provider", "missing"))
+        finally:
+            set_mock_mode(args.mock_alpha, "ok")
 
     fails = [r for r in RESULTS if r[0] == "FAIL"]
     warns = [r for r in RESULTS if r[0] == "WARN"]

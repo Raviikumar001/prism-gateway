@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prism Ops</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">Prism</span>
+      <span class="sub">ops console</span>
+    </div>
+    <form id="auth-form" class="auth" autocomplete="off">
+      <label>
+        Admin token
+        <input id="admin-token" type="password" placeholder="ADMIN_TOKEN" spellcheck="false" />
+      </label>
+      <label>
+        Virtual key
+        <input id="virtual-key" type="text" placeholder="prism-sk-…" spellcheck="false" />
+      </label>
+      <button type="submit">Load</button>
+      <button type="button" id="refresh" class="ghost">Refresh</button>
+    </form>
+  </header>
+
+  <main>
+    <section class="panel" id="providers-panel">
+      <h2>Providers / breakers</h2>
+      <p class="hint">Circuit state for each upstream. Open = skipped until cooldown.</p>
+      <div id="providers" class="cards"></div>
+    </section>
+
+    <section class="panel" id="cache-panel">
+      <h2>Cache</h2>
+      <p class="hint">Process-local hit counters since last restart.</p>
+      <div id="cache" class="stats"></div>
+    </section>
+
+    <section class="panel" id="usage-panel">
+      <h2>Usage</h2>
+      <p class="hint">Monthly rollup for the selected virtual key.</p>
+      <div id="usage" class="stats"></div>
+    </section>
+
+    <section class="panel wide" id="logs-panel">
+      <h2>Recent requests</h2>
+      <p class="hint">Latest request logs (failover shows as <code>fallback=true</code>).</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Model</th>
+              <th>Provider</th>
+              <th>Cache</th>
+              <th>Fallback</th>
+              <th>Cost µ¢</th>
+              <th>ms</th>
+            </tr>
+          </thead>
+          <tbody id="logs"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <p id="status" class="status" role="status"></p>
+  <script src="app.js"></script>
+</body>
+</html>

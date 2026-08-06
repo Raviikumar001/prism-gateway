@@ -12,6 +12,7 @@ import (
 	"github.com/raviikumar001/prism-gateway/internal/budget"
 	"github.com/raviikumar001/prism-gateway/internal/cache"
 	"github.com/raviikumar001/prism-gateway/internal/config"
+	"github.com/raviikumar001/prism-gateway/internal/consoleui"
 	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
@@ -69,6 +70,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/health", s.handleHealth)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
 	s.mountAdmin(r)
+	consoleui.Mount(r)
 
 	return r
 }
