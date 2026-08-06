@@ -68,7 +68,7 @@ func main() {
 
 	authSvc := auth.NewService(db)
 	resolver := route.NewResolver(gwCfg)
-	providers := provider.NewRegistry(gwCfg, 30*time.Second)
+	exec := provider.NewExecutor(gwCfg, 30*time.Second, 64)
 	meterSvc := meter.NewService(db)
 	rpm := limit.NewRPM(rdb)
 	_ = rpm.EnsureScript(ctx)
@@ -76,11 +76,12 @@ func main() {
 	reqLogger := httpapi.NewRequestLogger(db)
 	defer reqLogger.Close()
 
-	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, providers, meterSvc, rpm, budgetSvc, reqLogger)
+	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, exec, meterSvc, rpm, budgetSvc, reqLogger)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// WriteTimeout left unset (0) so SSE streams are not cut off.
 	}
 
 	go func() {

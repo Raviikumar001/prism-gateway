@@ -48,6 +48,7 @@ type UpstreamError struct {
 	StatusCode int
 	Body       json.RawMessage
 	Message    string
+	RetryAfter time.Duration
 }
 
 func (e *UpstreamError) Error() string {
@@ -117,7 +118,12 @@ func (c *OpenAICompat) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 		if msg == "" {
 			msg = string(body)
 		}
-		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: body, Message: msg}
+		return nil, &UpstreamError{
+			StatusCode: resp.StatusCode,
+			Body:       body,
+			Message:    msg,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 
 	var out ChatResponse

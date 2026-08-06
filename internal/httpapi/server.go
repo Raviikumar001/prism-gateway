@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -19,16 +18,16 @@ import (
 )
 
 type Server struct {
-	cfg       *config.Config
-	db        *pgxpool.Pool
-	rdb       *redis.Client
-	auth      *auth.Service
-	resolver  *route.Resolver
-	providers *provider.Registry
-	meter     *meter.Service
-	rpm       *limit.RPM
-	budget    *budget.Service
-	logger    *RequestLogger
+	cfg      *config.Config
+	db       *pgxpool.Pool
+	rdb      *redis.Client
+	auth     *auth.Service
+	resolver *route.Resolver
+	exec     *provider.Executor
+	meter    *meter.Service
+	rpm      *limit.RPM
+	budget   *budget.Service
+	logger   *RequestLogger
 }
 
 func NewServer(
@@ -37,23 +36,23 @@ func NewServer(
 	rdb *redis.Client,
 	authSvc *auth.Service,
 	resolver *route.Resolver,
-	providers *provider.Registry,
+	exec *provider.Executor,
 	meterSvc *meter.Service,
 	rpm *limit.RPM,
 	budgetSvc *budget.Service,
 	logger *RequestLogger,
 ) *Server {
 	return &Server{
-		cfg:       cfg,
-		db:        db,
-		rdb:       rdb,
-		auth:      authSvc,
-		resolver:  resolver,
-		providers: providers,
-		meter:     meterSvc,
-		rpm:       rpm,
-		budget:    budgetSvc,
-		logger:    logger,
+		cfg:      cfg,
+		db:       db,
+		rdb:      rdb,
+		auth:     authSvc,
+		resolver: resolver,
+		exec:     exec,
+		meter:    meterSvc,
+		rpm:      rpm,
+		budget:   budgetSvc,
+		logger:   logger,
 	}
 }
 
@@ -62,7 +61,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(120 * time.Second))
+	// Do not use middleware.Timeout here — it buffers via http.TimeoutHandler and breaks SSE.
 
 	r.Get("/health", s.handleHealth)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)

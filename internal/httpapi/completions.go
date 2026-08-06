@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -63,10 +64,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "messages is required")
 		return
 	}
-	if body.Stream {
-		writeAPIError(w, http.StatusNotImplemented, "invalid_request_error", "streaming not enabled yet")
-		return
-	}
 
 	if !tenant.AllowsModel(body.Model) {
 		writeAPIError(w, http.StatusForbidden, "model_not_allowed", "Model is not on this key's allowlist")
@@ -109,16 +106,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := res.ResolvedModel
-	client, providerName, err := s.providers.ClientForModel(model)
+	// Price estimate uses primary resolved model (conservative for chain).
+	primary := res.ResolvedModel
+	price, err := s.meter.Price(ctx, primary)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "not_found_error", err.Error())
-		return
-	}
-
-	price, err := s.meter.Price(ctx, model)
-	if err != nil {
-		slog.Error("price lookup failed", "err", err, "model", model)
+		slog.Error("price lookup failed", "err", err, "model", primary)
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Pricing unavailable for model")
 		return
 	}
@@ -137,7 +129,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			RequestID:      uuid.NewString(),
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
-			ResolvedModel:  model,
+			ResolvedModel:  primary,
 			Status:         "rejected_budget",
 			LatencyMs:      int(time.Since(start).Milliseconds()),
 		})
@@ -158,64 +150,188 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	upCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	upstream, err := client.ChatCompletion(upCtx, provider.ChatRequest{
-		Model:    model,
-		Messages: body.Messages,
-	})
-	if err != nil {
-		var ue *provider.UpstreamError
-		if errors.As(err, &ue) {
-			writeAPIError(w, http.StatusBadGateway, "upstream_error", ue.Message)
-			s.logger.Enqueue(logEntry{
-				RequestID:        uuid.NewString(),
-				VirtualKey:       tenant.VirtualKey,
-				RequestedModel:   body.Model,
-				ResolvedProvider: providerName,
-				ResolvedModel:    model,
-				Status:           "upstream_error",
-				LatencyMs:        int(time.Since(start).Milliseconds()),
-			})
-			return
-		}
-		slog.Error("upstream call failed", "err", err, "provider", providerName, "model", model)
-		writeAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream provider call failed")
+	if body.Stream {
+		s.handleStream(w, r, tenant, body, res.Chain, start, &actualCost)
 		return
 	}
 
-	cost := meter.CostUSD(upstream.Usage.PromptTokens, upstream.Usage.CompletionTokens, price)
+	result, err := s.exec.Chat(ctx, res.Chain, body.Messages)
+	if err != nil {
+		if errors.Is(err, provider.ErrClientAbort) {
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				Status:         "client_abort",
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
+			return
+		}
+		if errors.Is(err, provider.ErrOverloaded) {
+			writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Gateway overloaded")
+			return
+		}
+		writeAPIError(w, http.StatusBadGateway, "upstream_error", "All upstream providers failed")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			Status:         "upstream_error",
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
+		return
+	}
+
+	billPrice, err := s.meter.Price(ctx, result.Model)
+	if err != nil {
+		billPrice = price
+	}
+	cost := meter.CostUSD(result.Response.Usage.PromptTokens, result.Response.Usage.CompletionTokens, billPrice)
 	actualCost = meter.ToMicroCents(cost)
 	costStr := trimCost(meter.FormatUSD(cost))
 
 	reqID := uuid.NewString()
-	if upstream.ID != "" {
-		reqID = upstream.ID
+	if result.Response.ID != "" {
+		reqID = result.Response.ID
 	}
 
-	s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, upstream.Usage.PromptTokens, upstream.Usage.CompletionTokens, actualCost)
+	s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, result.Response.Usage.PromptTokens, result.Response.Usage.CompletionTokens, actualCost)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("x-prism-provider", providerName+"/"+model)
+	w.Header().Set("x-prism-provider", result.Provider+"/"+result.Model)
 	w.Header().Set("x-prism-cache", "miss")
-	w.Header().Set("x-prism-fallback", "false")
+	w.Header().Set("x-prism-fallback", fmt.Sprintf("%t", result.Fallback))
 	w.Header().Set("x-prism-cost-usd", costStr)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(upstream.Raw)
+	_, _ = w.Write(result.Response.Raw)
 
 	s.logger.Enqueue(logEntry{
 		RequestID:        reqID,
 		VirtualKey:       tenant.VirtualKey,
 		RequestedModel:   body.Model,
-		ResolvedProvider: providerName,
-		ResolvedModel:    model,
+		ResolvedProvider: result.Provider,
+		ResolvedModel:    result.Model,
 		Status:           "ok",
-		PromptTokens:     upstream.Usage.PromptTokens,
-		CompletionTokens: upstream.Usage.CompletionTokens,
+		PromptTokens:     result.Response.Usage.PromptTokens,
+		CompletionTokens: result.Response.Usage.CompletionTokens,
 		CostMicroCents:   actualCost,
 		Cache:            "miss",
-		Fallback:         false,
+		Fallback:         result.Fallback,
+		Retries:          result.Retries,
+		LatencyMs:        int(time.Since(start).Milliseconds()),
+	})
+}
+
+func (s *Server) handleStream(
+	w http.ResponseWriter,
+	r *http.Request,
+	tenant *auth.Tenant,
+	body chatRequestBody,
+	chain []string,
+	start time.Time,
+	actualCost *int64,
+) {
+	ctx := r.Context()
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "Streaming unsupported")
+		return
+	}
+
+	headersWritten := false
+	writeHeaders := func(prov, model string, fallback bool) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.Header().Set("x-prism-provider", prov+"/"+model)
+		w.Header().Set("x-prism-cache", "miss")
+		w.Header().Set("x-prism-fallback", fmt.Sprintf("%t", fallback))
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+		headersWritten = true
+	}
+
+	writeEvent := func(data []byte) error {
+		_, err := fmt.Fprintf(w, "data: %s\n\n", data)
+		if err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	writeDone := func() error {
+		_, err := io.WriteString(w, "data: [DONE]\n\n")
+		if err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	writeInBandError := func(msg string) error {
+		payload, _ := json.Marshal(map[string]any{
+			"error": map[string]string{"message": msg, "type": "upstream_error", "code": "upstream_error"},
+		})
+		_, err := fmt.Fprintf(w, "data: %s\n\n", payload)
+		if err != nil {
+			return err
+		}
+		flusher.Flush()
+		_ = writeDone()
+		return nil
+	}
+
+	streamRes, err := s.exec.ChatStream(ctx, chain, body.Messages, writeHeaders, writeEvent, writeDone, writeInBandError)
+
+	status := "ok"
+	prov, model := "", ""
+	fallback := false
+	retries := 0
+	var usage provider.Usage
+	if streamRes != nil {
+		prov, model = streamRes.Provider, streamRes.Model
+		fallback = streamRes.Fallback
+		retries = streamRes.Retries
+		usage = streamRes.Usage
+	}
+
+	if err != nil {
+		if errors.Is(err, provider.ErrClientAbort) {
+			status = "client_abort"
+		} else if !headersWritten {
+			if errors.Is(err, provider.ErrOverloaded) {
+				writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Gateway overloaded")
+			} else {
+				writeAPIError(w, http.StatusBadGateway, "upstream_error", "All upstream providers failed")
+			}
+			status = "upstream_error"
+		} else {
+			status = "upstream_error"
+		}
+	}
+
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+		billPrice, perr := s.meter.Price(context.WithoutCancel(ctx), model)
+		if perr == nil {
+			cost := meter.CostUSD(usage.PromptTokens, usage.CompletionTokens, billPrice)
+			*actualCost = meter.ToMicroCents(cost)
+			s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, usage.PromptTokens, usage.CompletionTokens, *actualCost)
+		}
+	}
+
+	s.logger.Enqueue(logEntry{
+		RequestID:        uuid.NewString(),
+		VirtualKey:       tenant.VirtualKey,
+		RequestedModel:   body.Model,
+		ResolvedProvider: prov,
+		ResolvedModel:    model,
+		Status:           status,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		CostMicroCents:   *actualCost,
+		Cache:            "miss",
+		Fallback:         fallback,
+		Retries:          retries,
 		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
 }
