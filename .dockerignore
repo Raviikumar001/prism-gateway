@@ -1,0 +1,8 @@
+.dockerignore
+.git
+docs
+pack-reference
+*.md
+.env
+.env.*
+web/node_modules
