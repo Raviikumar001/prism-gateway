@@ -1,17 +1,17 @@
 {
-  "_comment": "Live providers: Cerebras + OpenRouter. API keys are injected from env (api_key_env), never commit secrets here.",
+  "_comment": "Live providers: only active Cerebras Cloud models (+ OpenRouter twins). No archived/deprecated IDs.",
   "providers": [
     {
       "name": "cerebras",
       "base_url": "https://api.cerebras.ai/v1",
       "api_key_env": "CEREBRAS_API_KEY",
-      "models": ["gpt-oss-120b", "gemma-4-31b"]
+      "models": ["gemma-4-31b", "gpt-oss-120b", "zai-glm-4.7"]
     },
     {
       "name": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "OPENROUTER_API_KEY",
-      "models": ["meta-llama/llama-3.1-8b-instruct", "openai/gpt-4o-mini"],
+      "models": ["google/gemma-4-31b-it", "openai/gpt-oss-120b", "z-ai/glm-4.7"],
       "extra_headers": {
         "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
         "X-OpenRouter-Title": "Prism Gateway"
@@ -20,12 +20,12 @@
   ],
   "model_aliases": {
     "fast": {
-      "primary": "meta-llama/llama-3.1-8b-instruct",
+      "primary": "google/gemma-4-31b-it",
       "fallbacks": ["gemma-4-31b"]
     },
     "smart": {
       "primary": "gpt-oss-120b",
-      "fallbacks": ["openai/gpt-4o-mini"]
+      "fallbacks": ["openai/gpt-oss-120b"]
     },
     "auto": {
       "route_by_difficulty": { "simple": "fast", "complex": "smart" }

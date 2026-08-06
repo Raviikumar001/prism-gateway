@@ -9,15 +9,17 @@ import (
 func TestProviderForModelExplicitList(t *testing.T) {
 	cfg := &Config{
 		Providers: []Provider{
-			{Name: "cerebras", Models: []string{"gpt-oss-120b", "gemma-4-31b"}},
-			{Name: "openrouter", Models: []string{"meta-llama/llama-3.1-8b-instruct", "openai/gpt-4o-mini"}},
+			{Name: "cerebras", Models: []string{"gemma-4-31b", "gpt-oss-120b", "zai-glm-4.7"}},
+			{Name: "openrouter", Models: []string{"google/gemma-4-31b-it", "openai/gpt-oss-120b", "z-ai/glm-4.7"}},
 		},
 	}
 	cases := map[string]string{
-		"gpt-oss-120b":                      "cerebras",
-		"gemma-4-31b":                       "cerebras",
-		"meta-llama/llama-3.1-8b-instruct":  "openrouter",
-		"openai/gpt-4o-mini":                "openrouter",
+		"gemma-4-31b":             "cerebras",
+		"gpt-oss-120b":            "cerebras",
+		"zai-glm-4.7":             "cerebras",
+		"google/gemma-4-31b-it":   "openrouter",
+		"openai/gpt-oss-120b":     "openrouter",
+		"z-ai/glm-4.7":            "openrouter",
 	}
 	for model, want := range cases {
 		p, ok := cfg.ProviderForModel(model)
@@ -80,7 +82,7 @@ func TestLoadLiveConfig(t *testing.T) {
 	if _, ok := cfg.ProviderForModel("gpt-oss-120b"); !ok {
 		t.Fatal("gpt-oss-120b not mapped")
 	}
-	if _, ok := cfg.ProviderForModel("meta-llama/llama-3.1-8b-instruct"); !ok {
-		t.Fatal("openrouter model not mapped")
+	if _, ok := cfg.ProviderForModel("google/gemma-4-31b-it"); !ok {
+		t.Fatal("openrouter gemma not mapped")
 	}
 }

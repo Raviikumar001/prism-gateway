@@ -84,9 +84,11 @@ With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/ga
 
 | Alias | Primary | Fallback |
 |---|---|---|
-| `fast` | OpenRouter `meta-llama/llama-3.1-8b-instruct` | Cerebras `gemma-4-31b` |
-| `smart` | Cerebras `gpt-oss-120b` | OpenRouter `openai/gpt-4o-mini` |
-| `auto` | routes to `fast` / `smart` by difficulty | |
+| `fast` | OpenRouter `google/gemma-4-31b-it` | Cerebras `gemma-4-31b` |
+| `smart` | Cerebras `gpt-oss-120b` | OpenRouter `openai/gpt-oss-120b` |
+| `auto` | difficulty → `fast` (simple) / `smart` (complex) | same chains as above |
+
+Live model IDs are limited to Cerebras Cloud **active** models and their OpenRouter twins (`gemma-4-31b`, `gpt-oss-120b`, `zai-glm-4.7`). Archived Cerebras models (Llama 3.1 8B, Qwen 3 235B) are not used.
 
 Run against Compose Postgres/Redis without mocks:
 
