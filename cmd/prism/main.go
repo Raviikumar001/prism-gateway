@@ -66,6 +66,16 @@ func main() {
 		slog.Error("gateway config load failed", "err", err)
 		os.Exit(1)
 	}
+	if err := gwCfg.ApplyEnvSecrets(); err != nil {
+		slog.Error("gateway secrets failed", "err", err)
+		os.Exit(1)
+	}
+	if cfg.ProviderMode == "live" {
+		if err := gwCfg.RequireAPIKeys(); err != nil {
+			slog.Error("live provider keys missing", "err", err)
+			os.Exit(1)
+		}
+	}
 
 	authSvc := auth.NewService(db)
 	resolver := route.NewResolver(gwCfg)

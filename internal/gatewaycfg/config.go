@@ -8,28 +8,30 @@ import (
 )
 
 type Config struct {
-	Providers []Provider `json:"providers"`
-	Aliases   map[string]Alias `json:"model_aliases"`
-	Retry     Retry `json:"retry"`
+	Providers []Provider         `json:"providers"`
+	Aliases   map[string]Alias   `json:"model_aliases"`
+	Retry     Retry              `json:"retry"`
 }
 
 type Provider struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"base_url"`
+	APIKey       string            `json:"api_key"`
+	APIKeyEnv    string            `json:"api_key_env"`
+	Models       []string          `json:"models"`
+	ExtraHeaders map[string]string `json:"extra_headers"`
 }
 
 type Alias struct {
-	Primary   string   `json:"primary"`
-	Fallbacks []string `json:"fallbacks"`
-	// auto-only fields ignored here for phase 1
+	Primary           string          `json:"primary"`
+	Fallbacks         []string        `json:"fallbacks"`
 	RouteByDifficulty json.RawMessage `json:"route_by_difficulty"`
 }
 
 type Retry struct {
-	MaxAttempts        int `json:"max_attempts"`
-	InitialBackoffMs   int `json:"initial_backoff_ms"`
-	BackoffMultiplier  int `json:"backoff_multiplier"`
+	MaxAttempts       int `json:"max_attempts"`
+	InitialBackoffMs  int `json:"initial_backoff_ms"`
+	BackoffMultiplier int `json:"backoff_multiplier"`
 }
 
 func Load(path string) (*Config, error) {
@@ -59,6 +61,49 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// ApplyEnvSecrets fills empty api_key fields from api_key_env / known env vars.
+func (c *Config) ApplyEnvSecrets() error {
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		if p.APIKey != "" {
+			continue
+		}
+		envName := p.APIKeyEnv
+		if envName == "" {
+			switch strings.ToLower(p.Name) {
+			case "cerebras":
+				envName = "CEREBRAS_API_KEY"
+			case "openrouter":
+				envName = "OPENROUTER_API_KEY"
+			}
+		}
+		if envName == "" {
+			continue
+		}
+		if v := os.Getenv(envName); v != "" {
+			p.APIKey = v
+		}
+	}
+	return nil
+}
+
+func (c *Config) RequireAPIKeys() error {
+	var missing []string
+	for _, p := range c.Providers {
+		if p.APIKey == "" {
+			label := p.APIKeyEnv
+			if label == "" {
+				label = p.Name
+			}
+			missing = append(missing, label)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing API keys for providers: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func (c *Config) ProviderByName(name string) (Provider, bool) {
 	for _, p := range c.Providers {
 		if p.Name == name {
@@ -68,10 +113,22 @@ func (c *Config) ProviderByName(name string) (Provider, bool) {
 	return Provider{}, false
 }
 
-// ProviderForModel maps alpha-small -> alpha using provider name prefix convention.
+// ProviderForModel resolves which provider owns a model id.
+// Prefers explicit provider.models lists; falls back to mock-style "name-" prefix.
 func (c *Config) ProviderForModel(model string) (Provider, bool) {
 	for _, p := range c.Providers {
+		for _, m := range p.Models {
+			if m == model {
+				return p, true
+			}
+		}
+	}
+	for _, p := range c.Providers {
 		if strings.HasPrefix(model, p.Name+"-") || model == p.Name {
+			return p, true
+		}
+		// openrouter/google/... style prefix
+		if strings.HasPrefix(model, p.Name+"/") {
 			return p, true
 		}
 	}

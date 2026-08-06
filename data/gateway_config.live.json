@@ -1,0 +1,35 @@
+{
+  "_comment": "Live providers: Cerebras + OpenRouter. API keys are injected from env (api_key_env), never commit secrets here.",
+  "providers": [
+    {
+      "name": "cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "api_key_env": "CEREBRAS_API_KEY",
+      "models": ["gpt-oss-120b", "gemma-4-31b"]
+    },
+    {
+      "name": "openrouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "models": ["meta-llama/llama-3.1-8b-instruct", "openai/gpt-4o-mini"],
+      "extra_headers": {
+        "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
+        "X-OpenRouter-Title": "Prism Gateway"
+      }
+    }
+  ],
+  "model_aliases": {
+    "fast": {
+      "primary": "meta-llama/llama-3.1-8b-instruct",
+      "fallbacks": ["gemma-4-31b"]
+    },
+    "smart": {
+      "primary": "gpt-oss-120b",
+      "fallbacks": ["openai/gpt-4o-mini"]
+    },
+    "auto": {
+      "route_by_difficulty": { "simple": "fast", "complex": "smart" }
+    }
+  },
+  "retry": { "max_attempts": 3, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
+}

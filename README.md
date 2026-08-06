@@ -57,6 +57,8 @@ curl -s http://localhost:8080/health
 ```
 ### Mock providers (local failover drills)
 
+Compose starts `mock-alpha` / `mock-beta` and loads `gateway_config.docker.json` by default (`PROVIDER_MODE=mocks`).
+
 ```bash
 python3 scripts/mock_provider.py --port 9001 --name alpha
 python3 scripts/mock_provider.py --port 9002 --name beta
@@ -66,6 +68,38 @@ Take a provider down without restarting:
 
 ```bash
 curl -X POST http://localhost:9001/admin/config -d '{"mode":"down"}'
+```
+
+### Live providers (Cerebras + OpenRouter)
+
+Put keys in `.env` (never commit them):
+
+```
+PROVIDER_MODE=live
+CEREBRAS_API_KEY=...
+OPENROUTER_API_KEY=...
+```
+
+With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/gateway_config.live.json`:
+
+| Alias | Primary | Fallback |
+|---|---|---|
+| `fast` | OpenRouter `meta-llama/llama-3.1-8b-instruct` | Cerebras `gemma-4-31b` |
+| `smart` | Cerebras `gpt-oss-120b` | OpenRouter `openai/gpt-4o-mini` |
+| `auto` | routes to `fast` / `smart` by difficulty | |
+
+Run against Compose Postgres/Redis without mocks:
+
+```bash
+docker compose up -d postgres redis
+# export DATABASE_URL / REDIS_URL from .env, then:
+PROVIDER_MODE=live go run ./cmd/prism
+```
+
+Or point Compose at live config (keys via `env_file: .env`):
+
+```bash
+PROVIDER_MODE=live GATEWAY_CONFIG=/data/gateway_config.live.json docker compose up --build gateway
 ```
 
 ## API
@@ -97,7 +131,9 @@ Seed data lives under `data/`:
 
 - `seed_keys.json` — tenants, budgets, RPM, allowlists, cache settings
 - `model_pricing.json` — USD per 1M input/output tokens
-- `gateway_config.sample.json` — providers, aliases, retry policy
+- `gateway_config.sample.json` — mock providers (local)
+- `gateway_config.live.json` — Cerebras + OpenRouter (`api_key_env`, no secrets in file)
+- `gateway_config.docker.json` — Compose mock URLs
 
 Environment (see `.env.example`):
 
@@ -107,9 +143,10 @@ Environment (see `.env.example`):
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string |
 | `ADMIN_TOKEN` | Admin / console auth |
-| `PROVIDER_MODE` | `mocks` or `live` |
-| `CEREBRAS_API_KEY` | Live Cerebras traffic |
-| `OPENROUTER_API_KEY` | Live OpenRouter traffic + embeddings |
+| `PROVIDER_MODE` | `mocks` (default) or `live` |
+| `GATEWAY_CONFIG` | Optional override; live defaults to `gateway_config.live.json` under `DATA_DIR` |
+| `CEREBRAS_API_KEY` | Required when `PROVIDER_MODE=live` |
+| `OPENROUTER_API_KEY` | Required when `PROVIDER_MODE=live` |
 
 ## Deploy on Railway
 
@@ -124,10 +161,12 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
 ADMIN_TOKEN=<secret>
 PROVIDER_MODE=live
+DATA_DIR=/data
 CEREBRAS_API_KEY=...
 OPENROUTER_API_KEY=...
 ```
 
+`PROVIDER_MODE=live` selects `/data/gateway_config.live.json` unless `GATEWAY_CONFIG` is set. Keys are injected from env via `api_key_env` — do not bake secrets into the image.
 4. Health check path: `/health`
 5. Generate a public domain on the gateway service
 

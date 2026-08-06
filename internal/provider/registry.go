@@ -18,7 +18,7 @@ func NewRegistry(cfg *gatewaycfg.Config, timeout time.Duration) *Registry {
 		cfg:    cfg,
 	}
 	for _, p := range cfg.Providers {
-		r.byName[p.Name] = NewOpenAICompat(p.Name, p.BaseURL, p.APIKey, timeout)
+		r.byName[p.Name] = NewOpenAICompat(p.Name, p.BaseURL, p.APIKey, timeout, p.ExtraHeaders)
 	}
 	return r
 }

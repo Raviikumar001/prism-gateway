@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -27,14 +28,21 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	dataDir := getenv("DATA_DIR", "data")
+	providerMode := strings.ToLower(getenv("PROVIDER_MODE", "mocks"))
+	defaultGateway := filepath.Join(dataDir, "gateway_config.sample.json")
+	if providerMode == "live" {
+		defaultGateway = filepath.Join(dataDir, "gateway_config.live.json")
+	}
+
 	cfg := &Config{
 		Port:          getenv("PORT", "8080"),
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
 		RedisURL:      os.Getenv("REDIS_URL"),
 		AdminToken:    getenv("ADMIN_TOKEN", "dev-admin-change-me"),
-		ProviderMode:  strings.ToLower(getenv("PROVIDER_MODE", "mocks")),
-		DataDir:       getenv("DATA_DIR", "data"),
-		GatewayConfig: getenv("GATEWAY_CONFIG", "data/gateway_config.sample.json"),
+		ProviderMode:  providerMode,
+		DataDir:       dataDir,
+		GatewayConfig: getenv("GATEWAY_CONFIG", defaultGateway),
 		SeedOnBoot:    getenvBool("SEED_ON_BOOT", true),
 		CerebrasKey:   os.Getenv("CEREBRAS_API_KEY"),
 		OpenRouterKey: os.Getenv("OPENROUTER_API_KEY"),

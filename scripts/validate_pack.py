@@ -26,6 +26,47 @@ def read_jsonl(path):
     return rows
 
 
+def provider_owns_model(providers, model):
+    for provider in providers:
+        models = provider.get("models") or []
+        if model in models:
+            return True
+        name = provider["name"]
+        if model == name or model.startswith(name + "-") or model.startswith(name + "/"):
+            return True
+    return False
+
+
+def validate_gateway_config(path, priced_models):
+    config = read_json(path)
+    provider_names = set()
+    for provider in config["providers"]:
+        for field in ("name", "base_url"):
+            if not provider.get(field):
+                raise ValueError(f"{path.name}: provider missing {field}: {provider}")
+        if not provider.get("api_key") and not provider.get("api_key_env"):
+            raise ValueError(f"{path.name}: provider needs api_key or api_key_env: {provider}")
+        if provider["name"] in provider_names:
+            raise ValueError(f"{path.name}: duplicate provider name: {provider['name']}")
+        provider_names.add(provider["name"])
+
+    aliases = config["model_aliases"]
+    for alias, route in aliases.items():
+        if "route_by_difficulty" in route:
+            for tier, target in route["route_by_difficulty"].items():
+                if target not in aliases or "primary" not in aliases.get(target, {}):
+                    raise ValueError(
+                        f"{path.name}: alias '{alias}' tier '{tier}' routes to unknown alias '{target}'"
+                    )
+            continue
+        chain = [route["primary"]] + list(route.get("fallbacks", []))
+        for model in chain:
+            if model not in priced_models:
+                raise ValueError(f"{path.name}: alias '{alias}' references unpriced model '{model}'")
+            if not provider_owns_model(config["providers"], model):
+                raise ValueError(f"{path.name}: alias '{alias}' model '{model}' has no registered provider")
+
+
 def main():
     pricing = read_json(DATA_DIR / "model_pricing.json")
     seed = read_json(DATA_DIR / "seed_keys.json")
@@ -43,9 +84,11 @@ def main():
 
     provider_names = set()
     for provider in config["providers"]:
-        for field in ("name", "base_url", "api_key"):
+        for field in ("name", "base_url"):
             if not provider.get(field):
                 raise ValueError(f"Provider entry missing {field}: {provider}")
+        if not provider.get("api_key") and not provider.get("api_key_env"):
+            raise ValueError(f"Provider entry needs api_key or api_key_env: {provider}")
         if provider["name"] in provider_names:
             raise ValueError(f"Duplicate provider name: {provider['name']}")
         provider_names.add(provider["name"])
@@ -61,9 +104,11 @@ def main():
         for model in chain:
             if model not in priced_models:
                 raise ValueError(f"Alias '{alias}' references unpriced model '{model}'")
-            provider = model.rsplit("-", 1)[0]
-            if provider not in provider_names:
-                raise ValueError(f"Alias '{alias}' model '{model}' has no registered provider '{provider}'")
+            if not provider_owns_model(config["providers"], model):
+                raise ValueError(f"Alias '{alias}' model '{model}' has no registered provider")
+
+    validate_gateway_config(DATA_DIR / "gateway_config.live.json", priced_models)
+    validate_gateway_config(DATA_DIR / "gateway_config.docker.json", priced_models)
 
     keys_seen = set()
     for tenant in seed["tenants"]:

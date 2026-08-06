@@ -32,8 +32,7 @@ func (c *OpenAICompat) ChatCompletionStream(ctx context.Context, req ChatRequest
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	c.applyHeaders(httpReq)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	client := &http.Client{Timeout: 0, Transport: c.HTTPClient.Transport}

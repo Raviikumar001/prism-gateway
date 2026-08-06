@@ -59,17 +59,19 @@ func (e *UpstreamError) Error() string {
 }
 
 type OpenAICompat struct {
-	Name       string
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	Name         string
+	BaseURL      string
+	APIKey       string
+	ExtraHeaders map[string]string
+	HTTPClient   *http.Client
 }
 
-func NewOpenAICompat(name, baseURL, apiKey string, timeout time.Duration) *OpenAICompat {
+func NewOpenAICompat(name, baseURL, apiKey string, timeout time.Duration, extraHeaders map[string]string) *OpenAICompat {
 	return &OpenAICompat{
-		Name:    name,
-		BaseURL: baseURL,
-		APIKey:  apiKey,
+		Name:         name,
+		BaseURL:      baseURL,
+		APIKey:       apiKey,
+		ExtraHeaders: extraHeaders,
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 			Transport: &http.Transport{
@@ -78,6 +80,16 @@ func NewOpenAICompat(name, baseURL, apiKey string, timeout time.Duration) *OpenA
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
+	}
+}
+
+func (c *OpenAICompat) applyHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	for k, v := range c.ExtraHeaders {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 }
 
@@ -92,8 +104,7 @@ func (c *OpenAICompat) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	c.applyHeaders(httpReq)
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {

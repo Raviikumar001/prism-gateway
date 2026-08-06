@@ -1,7 +1,12 @@
 {
-  "_comment": "Prices in USD per 1M tokens. These are the source of truth for cost accounting against the mock providers. If you add a real provider, append its models here with current prices from the provider's pricing page.",
+  "_comment": "USD per 1M tokens. Mock prices for local drills; live rows from Cerebras / OpenRouter catalogs (verify before production).",
   "alpha-small": { "input_per_1m": 0.15, "output_per_1m": 0.60 },
   "alpha-large": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
   "beta-small":  { "input_per_1m": 0.10, "output_per_1m": 0.40 },
-  "beta-large":  { "input_per_1m": 2.50, "output_per_1m": 10.00 }
+  "beta-large":  { "input_per_1m": 2.50, "output_per_1m": 10.00 },
+
+  "gpt-oss-120b": { "input_per_1m": 0.35, "output_per_1m": 0.75 },
+  "gemma-4-31b": { "input_per_1m": 2.15, "output_per_1m": 2.70 },
+  "meta-llama/llama-3.1-8b-instruct": { "input_per_1m": 0.05, "output_per_1m": 0.08 },
+  "openai/gpt-4o-mini": { "input_per_1m": 0.15, "output_per_1m": 0.60 }
 }

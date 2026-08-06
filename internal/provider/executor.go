@@ -58,7 +58,7 @@ func NewExecutor(cfg *gatewaycfg.Config, timeout time.Duration, maxInFlight int)
 	}
 	bcfg := breaker.DefaultConfig()
 	for _, p := range cfg.Providers {
-		e.clients[p.Name] = NewOpenAICompat(p.Name, p.BaseURL, p.APIKey, timeout)
+		e.clients[p.Name] = NewOpenAICompat(p.Name, p.BaseURL, p.APIKey, timeout, p.ExtraHeaders)
 		e.breakers[p.Name] = breaker.New(bcfg)
 	}
 	return e
