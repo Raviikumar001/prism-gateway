@@ -11,11 +11,13 @@ import (
 )
 
 var (
-	ErrBudgetExceeded = errors.New("budget exceeded")
-	ErrRedisDown      = errors.New("redis unavailable")
+	ErrBudgetExceeded  = errors.New("budget exceeded")
+	ErrRedisDown       = errors.New("redis unavailable")
+	ErrReservationGone = errors.New("reservation no longer exists")
 )
 
 const reserveTTL = 120 * time.Second
+const RefreshInterval = reserveTTL / 3
 
 // Atomic reserve: reclaim expired holds, then check spend+held+estimate <= budget.
 const reserveLua = `
@@ -84,6 +86,28 @@ end
 redis.call('INCRBY', spend_key, actual)
 redis.call('EXPIRE', spend_key, month_ttl)
 return {1, reserved, actual}
+`
+
+const refreshLua = `
+local spend_key = KEYS[1]
+local held_key = KEYS[2]
+local zset_key = KEYS[3]
+local hash_key = KEYS[4]
+local resid = ARGV[1]
+local now = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local month_ttl = tonumber(ARGV[4])
+
+if redis.call('HEXISTS', hash_key, resid) == 0 then
+  return 0
+end
+
+redis.call('ZADD', zset_key, now + ttl, resid)
+redis.call('EXPIRE', spend_key, month_ttl)
+redis.call('EXPIRE', held_key, month_ttl)
+redis.call('EXPIRE', zset_key, month_ttl)
+redis.call('EXPIRE', hash_key, month_ttl)
+return 1
 `
 
 type Service struct {
@@ -162,6 +186,27 @@ func (s *Service) Settle(ctx context.Context, rsv *Reservation, actualMicroCents
 	).Result()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrRedisDown, err)
+	}
+	return nil
+}
+
+// Refresh extends an in-flight reservation so long-running streams cannot
+// release their budget hold while the upstream is still producing tokens.
+func (s *Service) Refresh(ctx context.Context, rsv *Reservation) error {
+	if rsv == nil {
+		return nil
+	}
+	spend, held, zset, hash := s.keys(rsv.Key, rsv.Month)
+	now := time.Now().UTC()
+	raw, err := s.rdb.Eval(ctx, refreshLua,
+		[]string{spend, held, zset, hash},
+		rsv.ID, now.Unix(), int64(reserveTTL.Seconds()), monthTTLSeconds(now),
+	).Int64()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRedisDown, err)
+	}
+	if raw != 1 {
+		return ErrReservationGone
 	}
 	return nil
 }

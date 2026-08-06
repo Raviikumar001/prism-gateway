@@ -49,6 +49,9 @@ def validate_gateway_config(path, priced_models):
         if provider["name"] in provider_names:
             raise ValueError(f"{path.name}: duplicate provider name: {provider['name']}")
         provider_names.add(provider["name"])
+        for model in provider.get("models") or []:
+            if model not in priced_models:
+                raise ValueError(f"{path.name}: provider model '{model}' has no price")
 
     aliases = config["model_aliases"]
     for alias, route in aliases.items():
@@ -60,6 +63,11 @@ def validate_gateway_config(path, priced_models):
                     )
             continue
         chain = [route["primary"]] + list(route.get("fallbacks", []))
+        if len(chain) > config.get("retry", {}).get("max_attempts", 0):
+            raise ValueError(
+                f"{path.name}: alias '{alias}' chain has {len(chain)} models but retry.max_attempts "
+                f"is {config.get('retry', {}).get('max_attempts', 0)}"
+            )
         for model in chain:
             if model not in priced_models:
                 raise ValueError(f"{path.name}: alias '{alias}' references unpriced model '{model}'")

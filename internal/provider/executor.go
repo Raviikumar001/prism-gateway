@@ -87,7 +87,7 @@ func isRetryable(err error) bool {
 	if errors.As(err, &ue) {
 		return ue.StatusCode == 429 || ue.StatusCode >= 500
 	}
-	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	return err != nil && !errors.Is(err, context.Canceled)
 }
 
 func isClientAbort(err error) bool {
@@ -112,7 +112,7 @@ func fullJitter(base time.Duration, attempt int, mult int) time.Duration {
 	return time.Duration(rand.Int63n(int64(max) + 1))
 }
 
-func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMessage) (*Result, error) {
+func (e *Executor) Chat(ctx context.Context, chain []string, request ChatRequest) (*Result, error) {
 	if err := e.acquire(ctx); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMess
 		primaryModel = chain[0]
 	}
 
-	for _, model := range chain {
+	for modelIndex, model := range chain {
 		prov, ok := e.cfg.ProviderForModel(model)
 		if !ok {
 			continue
@@ -142,25 +142,31 @@ func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMess
 		if br == nil || client == nil {
 			continue
 		}
-		if !br.Allow() {
+		allowed, probeID := br.Acquire()
+		if !allowed {
 			slog.Info("skipping open breaker", "provider", prov.Name, "model", model)
 			continue
+		}
+		if probeID != 0 {
+			defer br.ReleaseProbe(probeID)
 		}
 
 		providerAttempts := 0
 		for providerAttempts < 2 && attempts < maxAttempts {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, ErrClientAbort
 			}
 			attempts++
 			providerAttempts++
 
 			upCtx, cancel := context.WithTimeout(ctx, e.attemptTO)
-			resp, err := client.ChatCompletion(upCtx, ChatRequest{Model: model, Messages: messages})
+			upstreamRequest := request
+			upstreamRequest.Model = model
+			resp, err := client.ChatCompletion(upCtx, upstreamRequest)
 			cancel()
 
 			if err == nil {
-				br.Success()
+				br.Success(probeID)
 				return &Result{
 					Response: resp,
 					Provider: prov.Name,
@@ -170,7 +176,7 @@ func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMess
 				}, nil
 			}
 
-			if isClientAbort(err) || isClientAbort(ctx.Err()) {
+			if isClientAbort(err) || ctx.Err() != nil {
 				return nil, ErrClientAbort
 			}
 
@@ -181,16 +187,24 @@ func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMess
 					br.OpenFor(ue.RetryAfter)
 				}
 				if isRetryable(err) {
-					br.Failure()
+					br.Failure(probeID)
 				}
 				if ue.StatusCode >= 400 && ue.StatusCode < 500 && ue.StatusCode != 429 {
+					// A request-specific 4xx proves the provider is reachable.
+					// It must also release a half-open probe.
+					br.Success(probeID)
 					break
 				}
 			} else {
-				br.Failure()
+				br.Failure(probeID)
 			}
 
-			if providerAttempts < 2 && attempts < maxAttempts && isRetryable(err) {
+			remainingModels := len(chain) - modelIndex - 1
+			canRetry := providerAttempts < 2 &&
+				attempts < maxAttempts &&
+				attempts+remainingModels < maxAttempts &&
+				isRetryable(err)
+			if canRetry {
 				sleep := fullJitter(baseBackoff, providerAttempts-1, mult)
 				timer := time.NewTimer(sleep)
 				select {
@@ -211,13 +225,13 @@ func (e *Executor) Chat(ctx context.Context, chain []string, messages []ChatMess
 	if lastErr == nil {
 		return nil, ErrNoAttempts
 	}
-	return nil, fmt.Errorf("%w: %v", ErrAllFailed, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrAllFailed, lastErr)
 }
 
 func (e *Executor) ChatStream(
 	ctx context.Context,
 	chain []string,
-	messages []ChatMessage,
+	request ChatRequest,
 	writeHeaders func(provider, model string, fallback bool),
 	writeEvent func(data []byte) error,
 	writeDone func() error,
@@ -243,7 +257,7 @@ func (e *Executor) ChatStream(
 	}
 	headersSent := false
 
-	for _, model := range chain {
+	for modelIndex, model := range chain {
 		prov, ok := e.cfg.ProviderForModel(model)
 		if !ok {
 			continue
@@ -256,9 +270,13 @@ func (e *Executor) ChatStream(
 		if headersSent {
 			break
 		}
-		if !br.Allow() {
+		allowed, probeID := br.Acquire()
+		if !allowed {
 			slog.Info("skipping open breaker", "provider", prov.Name, "model", model)
 			continue
+		}
+		if probeID != 0 {
+			defer br.ReleaseProbe(probeID)
 		}
 
 		providerAttempts := 0
@@ -270,10 +288,12 @@ func (e *Executor) ChatStream(
 			providerAttempts++
 
 			upCtx, cancel := context.WithCancel(ctx)
-			resp, err := client.ChatCompletionStream(upCtx, ChatRequest{Model: model, Messages: messages})
+			upstreamRequest := request
+			upstreamRequest.Model = model
+			resp, err := client.ChatCompletionStream(upCtx, upstreamRequest)
 			if err != nil {
 				cancel()
-				if isClientAbort(err) || isClientAbort(ctx.Err()) {
+				if isClientAbort(err) || ctx.Err() != nil {
 					return nil, ErrClientAbort
 				}
 				lastErr = err
@@ -283,15 +303,21 @@ func (e *Executor) ChatStream(
 						br.OpenFor(ue.RetryAfter)
 					}
 					if isRetryable(err) {
-						br.Failure()
+						br.Failure(probeID)
 					}
 					if ue.StatusCode >= 400 && ue.StatusCode < 500 && ue.StatusCode != 429 {
+						br.Success(probeID)
 						break
 					}
 				} else {
-					br.Failure()
+					br.Failure(probeID)
 				}
-				if providerAttempts < 2 && attempts < maxAttempts && isRetryable(err) {
+				remainingModels := len(chain) - modelIndex - 1
+				canRetry := providerAttempts < 2 &&
+					attempts < maxAttempts &&
+					attempts+remainingModels < maxAttempts &&
+					isRetryable(err)
+				if canRetry {
 					sleep := fullJitter(baseBackoff, providerAttempts-1, mult)
 					timer := time.NewTimer(sleep)
 					select {
@@ -309,16 +335,22 @@ func (e *Executor) ChatStream(
 			writeHeaders(prov.Name, model, fallback)
 			headersSent = true
 
-			usage, readErr := ReadSSE(upCtx, resp.Body, func(ev StreamEvent) error {
+			usage, readErr := ReadSSE(upCtx, resp.Body, e.attemptTO, func(ev StreamEvent) error {
 				if ev.Done {
-					return writeDone()
+					if err := writeDone(); err != nil {
+						return fmt.Errorf("%w: %v", ErrClientAbort, err)
+					}
+					return nil
 				}
-				return writeEvent(ev.Data)
+				if err := writeEvent(ev.Data); err != nil {
+					return fmt.Errorf("%w: %v", ErrClientAbort, err)
+				}
+				return nil
 			})
 			cancel()
 
 			if readErr != nil {
-				if isClientAbort(readErr) || isClientAbort(ctx.Err()) {
+				if isClientAbort(readErr) || ctx.Err() != nil {
 					return &StreamResult{
 						Provider: prov.Name,
 						Model:    model,
@@ -327,7 +359,7 @@ func (e *Executor) ChatStream(
 						Usage:    usage,
 					}, ErrClientAbort
 				}
-				br.Failure()
+				br.Failure(probeID)
 				_ = writeInBandError(readErr.Error())
 				return &StreamResult{
 					Provider: prov.Name,
@@ -338,7 +370,7 @@ func (e *Executor) ChatStream(
 				}, readErr
 			}
 
-			br.Success()
+			br.Success(probeID)
 			return &StreamResult{
 				Provider: prov.Name,
 				Model:    model,
@@ -352,7 +384,7 @@ func (e *Executor) ChatStream(
 	if lastErr == nil {
 		return nil, ErrNoAttempts
 	}
-	return nil, fmt.Errorf("%w: %v", ErrAllFailed, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrAllFailed, lastErr)
 }
 
 func (e *Executor) HealthSnapshot() []map[string]any {

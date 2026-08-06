@@ -7,18 +7,213 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
 }
 
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream,omitempty"`
+	Model    string
+	Messages []ChatMessage
+	Stream   bool
+	fields   map[string]json.RawMessage
+}
+
+// DefaultMaxCompletionTokens is injected when callers omit an output cap. This
+// keeps budget reservations bounded while still leaving enough room for code.
+const DefaultMaxCompletionTokens = 4096
+
+func ParseChatRequest(raw []byte) (ChatRequest, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ChatRequest{}, err
+	}
+	if fields == nil {
+		return ChatRequest{}, fmt.Errorf("request body must be a JSON object")
+	}
+
+	var envelope struct {
+		Model    string        `json:"model"`
+		Messages []ChatMessage `json:"messages"`
+		Stream   bool          `json:"stream"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ChatRequest{}, err
+	}
+	for _, key := range []string{"max_completion_tokens", "max_tokens"} {
+		value, present := positiveInt(fields[key])
+		if present && value <= 0 {
+			return ChatRequest{}, fmt.Errorf("%s must be a positive integer", key)
+		}
+	}
+	return ChatRequest{
+		Model:    envelope.Model,
+		Messages: envelope.Messages,
+		Stream:   envelope.Stream,
+		fields:   fields,
+	}, nil
+}
+
+func (r ChatRequest) Payload(model string, stream bool) ([]byte, error) {
+	fields := make(map[string]json.RawMessage, len(r.fields)+2)
+	for k, v := range r.fields {
+		fields[k] = v
+	}
+	if len(fields) == 0 {
+		messages, err := json.Marshal(r.Messages)
+		if err != nil {
+			return nil, err
+		}
+		fields["messages"] = messages
+	}
+
+	modelJSON, _ := json.Marshal(model)
+	streamJSON, _ := json.Marshal(stream)
+	fields["model"] = modelJSON
+	fields["stream"] = streamJSON
+
+	if _, hasCompletion := positiveInt(fields["max_completion_tokens"]); !hasCompletion {
+		delete(fields, "max_completion_tokens")
+		if _, hasLegacy := positiveInt(fields["max_tokens"]); !hasLegacy {
+			limit, _ := json.Marshal(DefaultMaxCompletionTokens)
+			fields["max_tokens"] = limit
+		}
+	}
+	if stream {
+		var opts map[string]json.RawMessage
+		if raw := fields["stream_options"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &opts)
+		}
+		if opts == nil {
+			opts = make(map[string]json.RawMessage)
+		}
+		opts["include_usage"] = json.RawMessage("true")
+		encoded, err := json.Marshal(opts)
+		if err != nil {
+			return nil, err
+		}
+		fields["stream_options"] = encoded
+	}
+	return json.Marshal(fields)
+}
+
+func (r ChatRequest) CompletionTokenLimit() int {
+	for _, key := range []string{"max_completion_tokens", "max_tokens"} {
+		if n, ok := positiveInt(r.fields[key]); ok && n > 0 {
+			return n
+		}
+	}
+	return DefaultMaxCompletionTokens
+}
+
+// positiveInt distinguishes an omitted/null field from an invalid integer.
+// The boolean reports whether a non-null value was provided.
+func positiveInt(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var n int
+	if json.Unmarshal(raw, &n) != nil {
+		return 0, true
+	}
+	return n, true
+}
+
+func (r ChatRequest) PromptTokenUpperBound() int {
+	encoded, err := json.Marshal(r.fields)
+	if err != nil || len(encoded) == 0 {
+		return 1
+	}
+	// A token cannot encode fewer than one byte. Include chat-template
+	// overhead per message for a conservative budget hold.
+	return len(encoded) + 16*len(r.Messages)
+}
+
+func (r ChatRequest) LastUserText() string {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(r.Messages[i].Role, "user") {
+			text, _ := r.Messages[i].TextContent()
+			return text
+		}
+	}
+	return ""
+}
+
+func (r ChatRequest) RoutingText() string {
+	var b strings.Builder
+	for _, message := range r.Messages {
+		text, ok := message.TextContent()
+		if !ok || text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(message.Role)
+		b.WriteString(": ")
+		b.WriteString(text)
+	}
+	return b.String()
+}
+
+func (m ChatMessage) TextContent() (string, bool) {
+	var text string
+	if json.Unmarshal(m.Content, &text) == nil {
+		return text, true
+	}
+
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(m.Content, &parts) != nil || len(parts) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		if part.Type != "text" && part.Type != "input_text" {
+			return "", false
+		}
+		b.WriteString(part.Text)
+	}
+	return b.String(), true
+}
+
+// CacheVariant allows semantic caching only for a single, text-only user
+// message with no tools. It includes generation controls so incompatible
+// response shapes or output limits cannot collide.
+func (r ChatRequest) CacheVariant() (string, bool) {
+	if len(r.Messages) != 1 || !strings.EqualFold(r.Messages[0].Role, "user") {
+		return "", false
+	}
+	if _, ok := r.Messages[0].TextContent(); !ok {
+		return "", false
+	}
+	for _, key := range []string{
+		"tools", "tool_choice", "parallel_tool_calls",
+		"functions", "function_call",
+	} {
+		if raw, ok := r.fields[key]; ok && string(raw) != "null" && string(raw) != "[]" {
+			return "", false
+		}
+	}
+
+	variant := map[string]json.RawMessage{}
+	for key, raw := range r.fields {
+		if key == "model" || key == "messages" || key == "stream" {
+			continue
+		}
+		variant[key] = raw
+	}
+	encoded, err := json.Marshal(variant)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 type Usage struct {
@@ -35,14 +230,16 @@ type ChatResponse struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage Usage `json:"usage"`
+	Usage Usage           `json:"usage"`
 	Raw   json.RawMessage `json:"-"`
 }
+
+const maxUpstreamResponseBytes = 16 << 20
 
 type UpstreamError struct {
 	StatusCode int
@@ -67,18 +264,19 @@ type OpenAICompat struct {
 }
 
 func NewOpenAICompat(name, baseURL, apiKey string, timeout time.Duration, extraHeaders map[string]string) *OpenAICompat {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 20
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = timeout
 	return &OpenAICompat{
 		Name:         name,
 		BaseURL:      baseURL,
 		APIKey:       apiKey,
 		ExtraHeaders: extraHeaders,
 		HTTPClient: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 20,
-				IdleConnTimeout:     90 * time.Second,
-			},
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }
@@ -94,8 +292,7 @@ func (c *OpenAICompat) applyHeaders(req *http.Request) {
 }
 
 func (c *OpenAICompat) ChatCompletion(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	req.Stream = false
-	payload, err := json.Marshal(req)
+	payload, err := req.Payload(req.Model, false)
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +309,12 @@ func (c *OpenAICompat) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxUpstreamResponseBytes {
+		return nil, fmt.Errorf("upstream response exceeds 16 MiB")
 	}
 
 	if resp.StatusCode >= 400 {

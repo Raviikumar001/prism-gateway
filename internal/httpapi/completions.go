@@ -21,11 +21,7 @@ import (
 	"github.com/raviikumar001/prism-gateway/internal/route"
 )
 
-type chatRequestBody struct {
-	Model    string                 `json:"model"`
-	Messages []provider.ChatMessage `json:"messages"`
-	Stream   bool                   `json:"stream"`
-}
+const maxChatRequestBytes = 8 << 20
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -48,13 +44,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatRequestBytes)
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "Request body exceeds 8 MiB")
+			return
+		}
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "Could not read body")
 		return
 	}
-	var body chatRequestBody
-	if err := json.Unmarshal(raw, &body); err != nil {
+	body, err := provider.ParseChatRequest(raw)
+	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "Request body is not valid JSON")
 		return
 	}
@@ -93,37 +95,85 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("rpm check failed", "err", err)
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Rate limiter unavailable")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			Status:         "rate_limiter_unavailable",
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
+		return
+	}
+	tokenEstimate := body.PromptTokenUpperBound() + body.CompletionTokenLimit()
+	if err := s.rpm.AllowTokens(ctx, tenant.VirtualKey, tokenEstimate, tenant.TPM); err != nil {
+		if errors.Is(err, limit.ErrRateLimited) {
+			writeAPIError(w, http.StatusTooManyRequests, "token_rate_limit_exceeded", "Tokens per minute exceeded")
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				Status:         "rejected_tpm",
+				PromptTokens:   tokenEstimate,
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
+			return
+		}
+		slog.Error("tpm check failed", "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Token rate limiter unavailable")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			Status:         "token_rate_limiter_unavailable",
+			PromptTokens:   tokenEstimate,
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
 		return
 	}
 
-	contents := make([]string, len(body.Messages))
-	roles := make([]string, len(body.Messages))
-	for i, m := range body.Messages {
-		contents[i] = m.Content
-		roles[i] = m.Role
-	}
-	promptText := cache.LastUserContents(roles, contents)
-	normalized := cache.Normalize([]string{promptText})
+	promptText := body.LastUserText()
+	routingText := body.RoutingText()
+	cacheVariant, cacheSafe := body.CacheVariant()
+	normalized := cache.Key(body.Model, cacheVariant, promptText)
 
-	res, err := s.resolver.ResolvePrompt(body.Model, promptText)
+	res, err := s.resolver.ResolvePrompt(body.Model, routingText)
 	if err != nil {
 		status := http.StatusNotFound
 		typ := "not_found_error"
 		writeAPIError(w, status, typ, err.Error())
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			Status:         "model_not_found",
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
 		return
 	}
 
-	// Price estimate uses primary resolved model (conservative for chain).
 	primary := res.ResolvedModel
-	price, err := s.meter.Price(ctx, primary)
+	price, err := s.maxChainPrice(ctx, res.Chain)
 	if err != nil {
-		slog.Error("price lookup failed", "err", err, "model", primary)
+		slog.Error("price lookup failed", "err", err, "models", res.Chain)
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Pricing unavailable for model")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			ResolvedModel:  primary,
+			Status:         "pricing_unavailable",
+			RouteReason:    res.RouteReason,
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
 		return
 	}
 
-	if tenant.CacheEnabled && !body.Stream {
-		hit, _ := s.cache.Lookup(ctx, tenant.VirtualKey, normalized, tenant.CacheThreshold)
+	cacheEnabled := tenant.CacheEnabled && !body.Stream && cacheSafe
+	if cacheEnabled {
+		hit, cacheErr := s.cache.Lookup(ctx, tenant.VirtualKey, normalized, tenant.CacheThreshold)
+		if cacheErr != nil {
+			slog.Warn("cache lookup failed; continuing without cache", "err", cacheErr)
+		}
 		if hit != nil {
 			s.bumpCacheHit(context.WithoutCancel(ctx), tenant.VirtualKey)
 			w.Header().Set("Content-Type", "application/json")
@@ -137,7 +187,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				RequestID:      uuid.NewString(),
 				VirtualKey:     tenant.VirtualKey,
 				RequestedModel: body.Model,
-				ResolvedModel:  primary,
+				ResolvedModel:  responseModel(hit.Body, primary),
 				Status:         "ok",
 				Cache:          "hit",
 				RouteReason:    res.RouteReason,
@@ -147,7 +197,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	estimate := meter.EstimateMicroCents(meter.EstimatePromptTokens(contents...), meter.ReserveCompletionTokens, price)
+	estimate := meter.EstimateMicroCents(
+		body.PromptTokenUpperBound(),
+		body.CompletionTokenLimit(),
+		price,
+	)
 	budgetLimit := int64(math.Round(tenant.MonthlyBudgetUSD * 100_000_000.0))
 
 	rsv, err := s.budget.Reserve(ctx, tenant.VirtualKey, budgetLimit, estimate)
@@ -167,6 +221,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("budget reserve failed", "err", err)
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Budget service unavailable")
+		s.logger.Enqueue(logEntry{
+			RequestID:      uuid.NewString(),
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			ResolvedModel:  primary,
+			Status:         "budget_unavailable",
+			RouteReason:    res.RouteReason,
+			LatencyMs:      int(time.Since(start).Milliseconds()),
+		})
 		return
 	}
 
@@ -178,13 +241,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			slog.Error("budget settle failed", "err", err, "reservation", rsv.ID)
 		}
 	}()
+	stopRefresh := s.keepBudgetReservationAlive(rsv)
+	defer stopRefresh()
 
 	if body.Stream {
-		s.handleStream(w, r, tenant, body, res, start, &actualCost)
+		s.handleStream(w, r, tenant, body, res, start, estimate, price, &actualCost)
 		return
 	}
 
-	result, err := s.exec.Chat(ctx, res.Chain, body.Messages)
+	result, err := s.exec.Chat(ctx, res.Chain, body)
 	if err != nil {
 		if errors.Is(err, provider.ErrClientAbort) {
 			s.logger.Enqueue(logEntry{
@@ -198,6 +263,28 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, provider.ErrOverloaded) {
 			writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Gateway overloaded")
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				Status:         "gateway_overloaded",
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
+			return
+		}
+		var upstreamErr *provider.UpstreamError
+		if errors.As(err, &upstreamErr) &&
+			upstreamErr.StatusCode >= 400 &&
+			upstreamErr.StatusCode < 500 &&
+			upstreamErr.StatusCode != http.StatusTooManyRequests {
+			writeUpstreamClientError(w, upstreamErr)
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				Status:         "upstream_client_error",
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
 			return
 		}
 		writeAPIError(w, http.StatusBadGateway, "upstream_error", "All upstream providers failed")
@@ -225,7 +312,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, result.Response.Usage.PromptTokens, result.Response.Usage.CompletionTokens, actualCost)
-	if tenant.CacheEnabled {
+	if cacheEnabled {
 		if err := s.cache.Store(context.WithoutCancel(ctx), tenant.VirtualKey, normalized, result.Response.Raw); err != nil {
 			slog.Error("cache store failed", "err", err)
 		}
@@ -261,9 +348,11 @@ func (s *Server) handleStream(
 	w http.ResponseWriter,
 	r *http.Request,
 	tenant *auth.Tenant,
-	body chatRequestBody,
+	body provider.ChatRequest,
 	res *route.Resolution,
 	start time.Time,
+	estimatedCost int64,
+	reservedPrice meter.Price,
 	actualCost *int64,
 ) {
 	ctx := r.Context()
@@ -283,6 +372,8 @@ func (s *Server) handleStream(
 		w.Header().Set("x-prism-provider", prov+"/"+model)
 		w.Header().Set("x-prism-cache", "miss")
 		w.Header().Set("x-prism-fallback", fmt.Sprintf("%t", fallback))
+		w.Header().Set("x-prism-cost-usd", trimCost(meter.FormatUSD(float64(estimatedCost)/100_000_000.0)))
+		w.Header().Set("x-prism-cost-estimated", "true")
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 		headersWritten = true
@@ -317,7 +408,7 @@ func (s *Server) handleStream(
 		return nil
 	}
 
-	streamRes, err := s.exec.ChatStream(ctx, chain, body.Messages, writeHeaders, writeEvent, writeDone, writeInBandError)
+	streamRes, err := s.exec.ChatStream(ctx, chain, body, writeHeaders, writeEvent, writeDone, writeInBandError)
 
 	status := "ok"
 	prov, model := "", ""
@@ -335,12 +426,20 @@ func (s *Server) handleStream(
 		if errors.Is(err, provider.ErrClientAbort) {
 			status = "client_abort"
 		} else if !headersWritten {
-			if errors.Is(err, provider.ErrOverloaded) {
+			var upstreamErr *provider.UpstreamError
+			if errors.As(err, &upstreamErr) &&
+				upstreamErr.StatusCode >= 400 &&
+				upstreamErr.StatusCode < 500 &&
+				upstreamErr.StatusCode != http.StatusTooManyRequests {
+				writeUpstreamClientError(w, upstreamErr)
+				status = "upstream_client_error"
+			} else if errors.Is(err, provider.ErrOverloaded) {
 				writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Gateway overloaded")
+				status = "gateway_overloaded"
 			} else {
 				writeAPIError(w, http.StatusBadGateway, "upstream_error", "All upstream providers failed")
+				status = "upstream_error"
 			}
-			status = "upstream_error"
 		} else {
 			status = "upstream_error"
 		}
@@ -348,11 +447,13 @@ func (s *Server) handleStream(
 
 	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 		billPrice, perr := s.meter.Price(context.WithoutCancel(ctx), model)
-		if perr == nil {
-			cost := meter.CostUSD(usage.PromptTokens, usage.CompletionTokens, billPrice)
-			*actualCost = meter.ToMicroCents(cost)
-			s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, usage.PromptTokens, usage.CompletionTokens, *actualCost)
+		if perr != nil {
+			slog.Error("stream price lookup failed; using reserved price", "err", perr, "model", model)
+			billPrice = reservedPrice
 		}
+		cost := meter.CostUSD(usage.PromptTokens, usage.CompletionTokens, billPrice)
+		*actualCost = meter.ToMicroCents(cost)
+		s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, usage.PromptTokens, usage.CompletionTokens, *actualCost)
 	}
 
 	s.logger.Enqueue(logEntry{
@@ -371,6 +472,53 @@ func (s *Server) handleStream(
 		Retries:          retries,
 		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
+}
+
+func (s *Server) keepBudgetReservationAlive(rsv *budget.Reservation) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(budget.RefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refreshCtx, refreshCancel := context.WithTimeout(ctx, 5*time.Second)
+				err := s.budget.Refresh(refreshCtx, rsv)
+				refreshCancel()
+				if err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("budget reservation refresh failed", "err", err, "reservation", rsv.ID)
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (s *Server) maxChainPrice(ctx context.Context, chain []string) (meter.Price, error) {
+	if len(chain) == 0 {
+		return meter.Price{}, fmt.Errorf("empty model chain")
+	}
+	var maxPrice meter.Price
+	for _, model := range chain {
+		price, err := s.meter.Price(ctx, model)
+		if err != nil {
+			return meter.Price{}, err
+		}
+		if price.InputPer1M > maxPrice.InputPer1M {
+			maxPrice.InputPer1M = price.InputPer1M
+		}
+		if price.OutputPer1M > maxPrice.OutputPer1M {
+			maxPrice.OutputPer1M = price.OutputPer1M
+		}
+	}
+	return maxPrice, nil
 }
 
 func (s *Server) bumpUsage(ctx context.Context, virtualKey string, prompt, completion int, costMicroCents int64) {
@@ -437,6 +585,16 @@ func trimCost(s string) string {
 	return s
 }
 
+func responseModel(body json.RawMessage, fallback string) string {
+	var response struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &response) == nil && response.Model != "" {
+		return response.Model
+	}
+	return fallback
+}
+
 func writeAPIError(w http.ResponseWriter, status int, typ, message string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]string{
@@ -445,4 +603,19 @@ func writeAPIError(w http.ResponseWriter, status int, typ, message string) {
 			"code":    typ,
 		},
 	})
+}
+
+func writeUpstreamClientError(w http.ResponseWriter, upstreamErr *provider.UpstreamError) {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(upstreamErr.Body, &payload) == nil && len(payload["error"]) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(upstreamErr.StatusCode)
+		_, _ = w.Write(upstreamErr.Body)
+		return
+	}
+	message := upstreamErr.Message
+	if message == "" {
+		message = "Upstream rejected the request"
+	}
+	writeAPIError(w, upstreamErr.StatusCode, "invalid_request_error", message)
 }

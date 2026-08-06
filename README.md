@@ -84,11 +84,11 @@ With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/ga
 
 | Alias | Primary | Fallbacks |
 |---|---|---|
-| `fast` | OpenRouter `mistralai/mistral-nemo` (cheap) | Llama 3.1 8B → Gemma 3 4B → GPT-4.1 nano → Cerebras Gemma 4 31B |
-| `smart` | Cerebras `gpt-oss-120b` | OpenRouter GPT OSS → Gemini 2.5 Flash → GPT-4o mini → Claude 3 Haiku → Llama 3.3 70B |
+| `fast` | OpenRouter `mistralai/mistral-nemo` (cheap) | GPT-4.1 nano → Cerebras Gemma 4 31B |
+| `smart` | Cerebras `gpt-oss-120b` | OpenRouter GPT OSS → Claude Haiku 4.5 |
 | `auto` | difficulty → `fast` (simple) / `smart` (complex) | same chains as above |
 
-Live OpenRouter base URL: `https://openrouter.ai/api/v1`. We do **not** expose the full OpenRouter catalog — a curated mix (~20 models) covering cheap OSS plus Google / OpenAI / Anthropic. Research key allowlist includes `*` so those model IDs can be requested directly.
+Live OpenRouter base URL: `https://openrouter.ai/api/v1`. We do **not** expose the full OpenRouter catalog — a curated mix of 18 active models covering cheap OSS plus Google / OpenAI / Anthropic. Research key allowlist includes `*` so those model IDs can be requested directly. Archived and scheduled-for-deprecation models are excluded.
 
 Run against Compose Postgres/Redis without mocks:
 
@@ -111,7 +111,41 @@ PROVIDER_MODE=live GATEWAY_CONFIG=/data/gateway_config.live.json docker compose 
 | Method | Path | Auth |
 |---|---|---|
 | `POST` | `/v1/chat/completions` | `Authorization: Bearer <virtual-key>` |
+| `GET` | `/v1/models` | `Authorization: Bearer <virtual-key>` |
+| `GET` | `/v1/models/{model-id}` | `Authorization: Bearer <virtual-key>` |
 | `GET` | `/health` | none |
+
+### Coding-agent clients
+
+Prism preserves OpenAI Chat Completions fields such as `tools`, `tool_choice`,
+assistant `tool_calls`, tool-result messages, sampling controls, structured
+output options, and streaming tool-call deltas. Clients that accept an
+OpenAI-compatible Chat Completions base URL can use:
+
+```
+base_url = http://localhost:8080/v1
+api_key  = prism-sk-research-4d5e6f
+model    = openai/gpt-4.1-mini  # or fast / smart / auto
+```
+
+Tool-using and multi-turn requests bypass the semantic response cache so stale
+tool calls cannot be replayed. If no output cap is supplied, Prism enforces
+`max_tokens: 4096` for bounded budget admission.
+RPM and TPM are enforced before upstream dispatch; TPM reserves the request's
+prompt upper bound plus its output cap, so callers should set `max_tokens` to a
+realistic value.
+
+Known compatibility boundary: Prism implements Chat Completions and model
+discovery, not OpenAI's `/v1/responses`, embeddings, audio, or fine-tuning APIs.
+
+Run the live coding-agent contract check:
+
+```bash
+python3 scripts/coding_agent_test.py \
+  --url http://localhost:8080 \
+  --key prism-sk-research-4d5e6f \
+  --model openai/gpt-4o-mini
+```
 
 ### Admin
 
@@ -145,6 +179,8 @@ Environment (see `.env.example`):
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string |
 | `ADMIN_TOKEN` | Admin / console auth |
+| `SEED_ON_BOOT` | Seed demo tenants/prices on startup (`true` by default) |
+| `UPSTREAM_TIMEOUT` | Non-stream timeout and stream inactivity timeout (`120s`) |
 | `PROVIDER_MODE` | `mocks` (default) or `live` |
 | `GATEWAY_CONFIG` | Optional override; live defaults to `gateway_config.live.json` under `DATA_DIR` |
 | `CEREBRAS_API_KEY` | Required when `PROVIDER_MODE=live` |
@@ -172,6 +208,10 @@ OPENROUTER_API_KEY=...
 4. Health check path: `/health`
 5. Generate a public domain on the gateway service
 
+The virtual keys in `data/seed_keys.json` are public demo credentials. Replace
+them before exposing a deployment, then set `SEED_ON_BOOT=false` after initial
+provisioning.
+
 The process listens on `0.0.0.0:$PORT`. Migrations run on startup.
 
 Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
@@ -180,13 +220,14 @@ Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 Request path:
 
-1. Authenticate virtual key  
-2. Allowlist → RPM → **budget reserve**  
-3. Resolve alias (`auto` uses feature-weighted difficulty)  
-4. Cache (exact hash, then semantic)  
-5. Upstream with timeout / retry+jitter / **circuit breaker** / cross-vendor failover  
-6. Stream or return; meter from provider `usage`; **settle reservation**  
-7. Enqueue request log + update usage  
+1. Authenticate virtual key
+2. Allowlist → RPM / TPM
+3. Resolve alias (`auto` uses feature-weighted difficulty)
+4. Cache (exact hash, then semantic)
+5. **Budget reserve** using the output cap and most expensive fallback
+6. Upstream with timeout / retry+jitter / **circuit breaker** / cross-vendor failover
+7. Stream or return; meter from provider `usage`; **settle reservation**
+8. Enqueue request log + update usage
 
 Ops console also surfaces **provider / breaker health** via `/admin/providers/health`.
 
@@ -205,7 +246,7 @@ go run ./cmd/routeval ./data/routing_eval.jsonl
 python3 scripts/smoke_test.py --url http://localhost:8080 --key prism-sk-search-1a2b3c --model fast \
   --admin-token dev-admin-change-me --check-failover
 python3 scripts/load_test.py  --url http://localhost:8080 --key prism-sk-free-7g8h9i \
-  --model fast --requests 30 --concurrency 10 --rpm-limit 10
+  --model fast --requests 30 --concurrency 10 --rpm-limit 10 --max-tokens 64
 ```
 
 Local planning notes (gitignored): `docs/BUILD_PLAN.md`, `docs/PROVIDERS.md`, `docs/CONFIGURATION.md`.

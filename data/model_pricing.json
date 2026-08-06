@@ -7,10 +7,8 @@
 
   "gemma-4-31b": { "input_per_1m": 2.15, "output_per_1m": 2.70 },
   "gpt-oss-120b": { "input_per_1m": 0.35, "output_per_1m": 0.75 },
-  "zai-glm-4.7": { "input_per_1m": 2.25, "output_per_1m": 2.75 },
 
   "mistralai/mistral-nemo": { "input_per_1m": 0.019, "output_per_1m": 0.03 },
-  "meta-llama/llama-3.1-8b-instruct": { "input_per_1m": 0.05, "output_per_1m": 0.08 },
   "google/gemma-3-4b-it": { "input_per_1m": 0.05, "output_per_1m": 0.10 },
   "google/gemma-3-12b-it": { "input_per_1m": 0.05, "output_per_1m": 0.15 },
   "google/gemma-4-31b-it": { "input_per_1m": 0.10, "output_per_1m": 0.34 },
@@ -27,6 +25,5 @@
   "anthropic/claude-sonnet-4": { "input_per_1m": 3.00, "output_per_1m": 15.00 },
   "meta-llama/llama-3.3-70b-instruct": { "input_per_1m": 0.10, "output_per_1m": 0.32 },
   "deepseek/deepseek-chat-v3-0324": { "input_per_1m": 0.27, "output_per_1m": 1.12 },
-  "mistralai/mistral-small-3.1-24b-instruct": { "input_per_1m": 0.351, "output_per_1m": 0.555 },
-  "z-ai/glm-4.7": { "input_per_1m": 0.40, "output_per_1m": 1.75 }
+  "mistralai/mistral-small-3.1-24b-instruct": { "input_per_1m": 0.351, "output_per_1m": 0.555 }
 }

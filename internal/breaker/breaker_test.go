@@ -53,3 +53,51 @@ func TestHalfOpenProbe(t *testing.T) {
 		t.Fatalf("expected closed after probe success, got %s", b.State())
 	}
 }
+
+func TestReleaseHalfOpenProbeAllowsAnotherAttempt(t *testing.T) {
+	b := breaker.New(breaker.Config{
+		WindowSize:  2,
+		FailureRate: 0.5,
+		Cooldown:    time.Millisecond,
+		MinRequests: 2,
+	})
+	b.Failure()
+	b.Failure()
+	time.Sleep(2 * time.Millisecond)
+	allowed, probeID := b.Acquire()
+	if !allowed || probeID == 0 {
+		t.Fatal("expected first half-open probe")
+	}
+	b.ReleaseProbe(probeID)
+	if !b.Allow() {
+		t.Fatal("released probe should allow another attempt")
+	}
+	b.ReleaseProbe(probeID)
+	if b.Allow() {
+		t.Fatal("stale probe token released a newer probe")
+	}
+}
+
+func TestUnrelatedOutcomeCannotCompleteHalfOpenProbe(t *testing.T) {
+	b := breaker.New(breaker.Config{
+		WindowSize:  2,
+		FailureRate: 0.5,
+		Cooldown:    time.Millisecond,
+		MinRequests: 2,
+	})
+	b.Failure()
+	b.Failure()
+	time.Sleep(2 * time.Millisecond)
+	allowed, probeID := b.Acquire()
+	if !allowed || probeID == 0 {
+		t.Fatal("expected half-open probe")
+	}
+	b.Success(0)
+	if b.Allow() {
+		t.Fatal("unrelated success completed the active probe")
+	}
+	b.Success(probeID)
+	if b.State() != breaker.Closed {
+		t.Fatalf("probe success did not close breaker: %s", b.State())
+	}
+}

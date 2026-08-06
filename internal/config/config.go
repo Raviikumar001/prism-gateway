@@ -7,22 +7,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Port          string
-	DatabaseURL   string
-	RedisURL      string
-	AdminToken    string
-	ProviderMode  string
-	DataDir       string
-	GatewayConfig string
-	SeedOnBoot    bool
-	LogLevel      slog.Level
-	CerebrasKey   string
-	OpenRouterKey string
+	Port            string
+	DatabaseURL     string
+	RedisURL        string
+	AdminToken      string
+	ProviderMode    string
+	DataDir         string
+	GatewayConfig   string
+	SeedOnBoot      bool
+	LogLevel        slog.Level
+	UpstreamTimeout time.Duration
 }
 
 func Load() (*Config, error) {
@@ -30,22 +30,25 @@ func Load() (*Config, error) {
 
 	dataDir := getenv("DATA_DIR", "data")
 	providerMode := strings.ToLower(getenv("PROVIDER_MODE", "mocks"))
+	upstreamTimeout, err := time.ParseDuration(getenv("UPSTREAM_TIMEOUT", "120s"))
+	if err != nil || upstreamTimeout <= 0 {
+		return nil, fmt.Errorf("UPSTREAM_TIMEOUT must be a positive duration")
+	}
 	defaultGateway := filepath.Join(dataDir, "gateway_config.sample.json")
 	if providerMode == "live" {
 		defaultGateway = filepath.Join(dataDir, "gateway_config.live.json")
 	}
 
 	cfg := &Config{
-		Port:          getenv("PORT", "8080"),
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		RedisURL:      os.Getenv("REDIS_URL"),
-		AdminToken:    getenv("ADMIN_TOKEN", "dev-admin-change-me"),
-		ProviderMode:  providerMode,
-		DataDir:       dataDir,
-		GatewayConfig: getenv("GATEWAY_CONFIG", defaultGateway),
-		SeedOnBoot:    getenvBool("SEED_ON_BOOT", true),
-		CerebrasKey:   os.Getenv("CEREBRAS_API_KEY"),
-		OpenRouterKey: os.Getenv("OPENROUTER_API_KEY"),
+		Port:            getenv("PORT", "8080"),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		RedisURL:        os.Getenv("REDIS_URL"),
+		AdminToken:      getenv("ADMIN_TOKEN", "dev-admin-change-me"),
+		ProviderMode:    providerMode,
+		DataDir:         dataDir,
+		GatewayConfig:   getenv("GATEWAY_CONFIG", defaultGateway),
+		SeedOnBoot:      getenvBool("SEED_ON_BOOT", true),
+		UpstreamTimeout: upstreamTimeout,
 	}
 
 	level, err := parseLogLevel(getenv("LOG_LEVEL", "info"))

@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 )
 
@@ -46,7 +48,7 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		SELECT requests, prompt_tokens, completion_tokens, cost_micro_cents, cache_hits
 		FROM usage_monthly WHERE virtual_key = $1 AND month = $2
 	`, key, month).Scan(&requests, &prompt, &completion, &cost, &hits)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"virtual_key":       key,
 			"month":             month,
@@ -58,15 +60,19 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not load usage")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"virtual_key":         key,
-		"month":               month,
-		"requests":            requests,
-		"prompt_tokens":       prompt,
-		"completion_tokens":   completion,
-		"cost_micro_cents":    cost,
-		"cost_usd":            trimCost(meter.FormatUSD(float64(cost) / 100_000_000.0)),
-		"cache_hits":          hits,
+		"virtual_key":       key,
+		"month":             month,
+		"requests":          requests,
+		"prompt_tokens":     prompt,
+		"completion_tokens": completion,
+		"cost_micro_cents":  cost,
+		"cost_usd":          trimCost(meter.FormatUSD(float64(cost) / 100_000_000.0)),
+		"cache_hits":        hits,
 	})
 }
 
@@ -125,6 +131,10 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not load logs")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": out})
 }

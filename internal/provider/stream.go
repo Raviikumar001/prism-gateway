@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+var (
+	ErrStreamIdleTimeout = errors.New("upstream stream idle timeout")
+	ErrStreamMissingDone = errors.New("upstream stream ended without [DONE]")
+)
+
 // StreamEvent is one SSE data payload (without the "data: " prefix).
 type StreamEvent struct {
 	Data []byte
@@ -22,8 +27,7 @@ type StreamEvent struct {
 // ChatCompletionStream starts an upstream SSE stream. On success the caller must
 // drain/close resp.Body. HTTP error responses are returned as UpstreamError.
 func (c *OpenAICompat) ChatCompletionStream(ctx context.Context, req ChatRequest) (*http.Response, error) {
-	req.Stream = true
-	payload, err := json.Marshal(req)
+	payload, err := req.Payload(req.Model, true)
 	if err != nil {
 		return nil, err
 	}
@@ -77,29 +81,84 @@ func parseRetryAfter(v string) time.Duration {
 	return d
 }
 
-// ReadSSE reads OpenAI-style SSE until [DONE], ctx cancel, or read error.
-func ReadSSE(ctx context.Context, body io.ReadCloser, onEvent func(StreamEvent) error) (Usage, error) {
+// ReadSSE reads OpenAI-style SSE until [DONE], ctx cancel, read error, or an
+// inactivity timeout. The timeout is reset whenever the upstream sends a line.
+func ReadSSE(ctx context.Context, body io.ReadCloser, idleTimeout time.Duration, onEvent func(StreamEvent) error) (Usage, error) {
 	var usage Usage
 	defer body.Close()
 
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = body.Close()
-		case <-done:
-		}
-	}()
+	type scanResult struct {
+		line string
+		err  error
+		eof  bool
+	}
+	results := make(chan scanResult, 1)
+	stop := make(chan struct{})
+	defer close(stop)
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return usage, err
+	go func() {
+		for scanner.Scan() {
+			select {
+			case results <- scanResult{line: scanner.Text()}:
+			case <-stop:
+				return
+			}
 		}
-		line := scanner.Text()
+		select {
+		case results <- scanResult{err: scanner.Err(), eof: true}:
+		case <-stop:
+		}
+	}()
+
+	var timer *time.Timer
+	var idle <-chan time.Time
+	if idleTimeout > 0 {
+		timer = time.NewTimer(idleTimeout)
+		idle = timer.C
+		defer timer.Stop()
+	}
+	resetIdle := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(idleTimeout)
+	}
+
+	for {
+		var result scanResult
+		select {
+		case <-ctx.Done():
+			_ = body.Close()
+			return usage, ctx.Err()
+		case <-idle:
+			_ = body.Close()
+			return usage, ErrStreamIdleTimeout
+		case result = <-results:
+			resetIdle()
+		}
+
+		if result.eof {
+			if result.err != nil {
+				if ctx.Err() != nil {
+					return usage, ctx.Err()
+				}
+				if errors.Is(result.err, io.ErrClosedPipe) {
+					return usage, ctx.Err()
+				}
+				return usage, result.err
+			}
+			return usage, ErrStreamMissingDone
+		}
+
+		line := result.line
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue
 		}
@@ -124,14 +183,4 @@ func ReadSSE(ctx context.Context, body io.ReadCloser, onEvent func(StreamEvent) 
 			return usage, err
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			return usage, ctx.Err()
-		}
-		if errors.Is(err, io.ErrClosedPipe) {
-			return usage, ctx.Err()
-		}
-		return usage, err
-	}
-	return usage, nil
 }

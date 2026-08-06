@@ -14,7 +14,7 @@ Fires a burst of concurrent, cache-busting chat completions and reports:
 Run against the mock providers so the burst is free and deterministic:
 
     python3 load_test.py --url http://localhost:8080 --key prism-sk-free-7g8h9i \
-        --model fast --requests 30 --concurrency 10 --rpm-limit 10
+        --model fast --requests 30 --concurrency 10 --rpm-limit 10 --max-tokens 64
 
 Exit code is 1 only when over-admission is detected (with --rpm-limit) or no
 request succeeded at all.
@@ -31,10 +31,11 @@ import urllib.request
 import uuid
 
 
-def fire(base, key, model, salt, results, lock):
+def fire(base, key, model, salt, max_tokens, results, lock):
     body = {
         "model": model,
         "messages": [{"role": "user", "content": f"({salt}) What is a message queue and when should I use one?"}],
+        "max_tokens": max_tokens,
     }
     req = urllib.request.Request(
         base.rstrip("/") + "/v1/chat/completions",
@@ -78,6 +79,8 @@ def main():
     parser.add_argument("--concurrency", type=int, default=10, help="concurrent threads")
     parser.add_argument("--rpm-limit", type=int, default=None,
                         help="the key's configured requests-per-minute limit, for the over-admission check")
+    parser.add_argument("--max-tokens", type=int, default=64,
+                        help="per-request completion cap used to keep the burst below TPM")
     args = parser.parse_args()
 
     results, lock = [], threading.Lock()
@@ -92,7 +95,8 @@ def main():
                 if not pending:
                     return
                 pending.pop()
-            fire(args.url, args.key, args.model, uuid.uuid4().hex[:8], results, lock)
+            fire(args.url, args.key, args.model, uuid.uuid4().hex[:8],
+                 args.max_tokens, results, lock)
 
     for _ in range(min(args.concurrency, args.requests)):
         t = threading.Thread(target=worker)

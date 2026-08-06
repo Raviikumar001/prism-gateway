@@ -8,9 +8,9 @@ import (
 )
 
 type Config struct {
-	Providers []Provider         `json:"providers"`
-	Aliases   map[string]Alias   `json:"model_aliases"`
-	Retry     Retry              `json:"retry"`
+	Providers []Provider       `json:"providers"`
+	Aliases   map[string]Alias `json:"model_aliases"`
+	Retry     Retry            `json:"retry"`
 }
 
 type Provider struct {
@@ -58,7 +58,72 @@ func Load(path string) (*Config, error) {
 	for i := range cfg.Providers {
 		cfg.Providers[i].BaseURL = strings.TrimRight(cfg.Providers[i].BaseURL, "/")
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func (c *Config) Validate() error {
+	providerNames := make(map[string]struct{}, len(c.Providers))
+	modelOwners := make(map[string]string)
+	for _, provider := range c.Providers {
+		if provider.Name == "" || provider.BaseURL == "" {
+			return fmt.Errorf("gateway config provider requires name and base_url")
+		}
+		if _, exists := providerNames[provider.Name]; exists {
+			return fmt.Errorf("duplicate provider %q", provider.Name)
+		}
+		providerNames[provider.Name] = struct{}{}
+		for _, model := range provider.Models {
+			if owner, exists := modelOwners[model]; exists {
+				return fmt.Errorf("model %q belongs to both %q and %q", model, owner, provider.Name)
+			}
+			modelOwners[model] = provider.Name
+		}
+	}
+
+	longestChain := 0
+	for name, alias := range c.Aliases {
+		if len(alias.RouteByDifficulty) > 0 {
+			var routes map[string]string
+			if err := json.Unmarshal(alias.RouteByDifficulty, &routes); err != nil {
+				return fmt.Errorf("alias %q route_by_difficulty: %w", name, err)
+			}
+			for tier, target := range routes {
+				targetAlias, ok := c.Aliases[target]
+				if !ok || targetAlias.Primary == "" {
+					return fmt.Errorf("alias %q tier %q targets invalid alias %q", name, tier, target)
+				}
+			}
+			continue
+		}
+		if alias.Primary == "" {
+			return fmt.Errorf("alias %q has no primary", name)
+		}
+		chain := append([]string{alias.Primary}, alias.Fallbacks...)
+		if len(chain) > longestChain {
+			longestChain = len(chain)
+		}
+		seen := make(map[string]struct{}, len(chain))
+		for _, model := range chain {
+			if _, duplicate := seen[model]; duplicate {
+				return fmt.Errorf("alias %q repeats model %q", name, model)
+			}
+			seen[model] = struct{}{}
+			if _, ok := c.ProviderForModel(model); !ok {
+				return fmt.Errorf("alias %q references model %q with no provider", name, model)
+			}
+		}
+	}
+	if c.Retry.MaxAttempts < longestChain {
+		return fmt.Errorf(
+			"retry.max_attempts=%d cannot reach longest fallback chain of %d models",
+			c.Retry.MaxAttempts,
+			longestChain,
+		)
+	}
+	return nil
 }
 
 // ApplyEnvSecrets fills empty api_key fields from api_key_env / known env vars.

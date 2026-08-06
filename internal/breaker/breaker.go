@@ -14,10 +14,10 @@ const (
 )
 
 type Config struct {
-	WindowSize   int
-	FailureRate  float64
-	Cooldown     time.Duration
-	MinRequests  int
+	WindowSize  int
+	FailureRate float64
+	Cooldown    time.Duration
+	MinRequests int
 }
 
 func DefaultConfig() Config {
@@ -38,6 +38,7 @@ type Breaker struct {
 	idx      int
 	filled   int
 	probing  bool
+	probeID  uint64
 }
 
 func New(cfg Config) *Breaker {
@@ -69,39 +70,66 @@ func (b *Breaker) State() State {
 
 // Allow returns false when the breaker is open (skip provider).
 func (b *Breaker) Allow() bool {
+	allowed, _ := b.Acquire()
+	return allowed
+}
+
+// Acquire returns whether a request may proceed and a non-zero token when this
+// caller owns the single half-open probe.
+func (b *Breaker) Acquire() (bool, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.maybeHalfOpenLocked(time.Now())
 	switch b.state {
 	case Open:
-		return false
+		return false, 0
 	case HalfOpen:
 		if b.probing {
-			return false
+			return false, 0
 		}
 		b.probing = true
-		return true
+		b.probeID++
+		return true, b.probeID
 	default:
-		return true
+		return true, 0
 	}
 }
 
-func (b *Breaker) Success() {
+// ReleaseProbe clears a half-open probe that exited without a provider
+// success/failure outcome, such as a downstream client cancellation.
+func (b *Breaker) ReleaseProbe(probeID uint64) {
+	if probeID == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state == HalfOpen && b.probing && b.probeID == probeID {
+		b.probing = false
+	}
+}
+
+func (b *Breaker) Success(probeIDs ...uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.recordLocked(true)
 	if b.state == HalfOpen {
+		if len(probeIDs) > 0 && (probeIDs[0] == 0 || probeIDs[0] != b.probeID) {
+			return
+		}
 		b.state = Closed
 		b.probing = false
 		b.resetWindowLocked()
 	}
 }
 
-func (b *Breaker) Failure() {
+func (b *Breaker) Failure(probeIDs ...uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.recordLocked(false)
 	if b.state == HalfOpen {
+		if len(probeIDs) > 0 && (probeIDs[0] == 0 || probeIDs[0] != b.probeID) {
+			return
+		}
 		b.state = Open
 		b.openedAt = time.Now()
 		b.probing = false

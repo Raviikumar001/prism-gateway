@@ -5,7 +5,7 @@
       "name": "cerebras",
       "base_url": "https://api.cerebras.ai/v1",
       "api_key_env": "CEREBRAS_API_KEY",
-      "models": ["gemma-4-31b", "gpt-oss-120b", "zai-glm-4.7"]
+      "models": ["gemma-4-31b", "gpt-oss-120b"]
     },
     {
       "name": "openrouter",
@@ -13,7 +13,6 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "models": [
         "mistralai/mistral-nemo",
-        "meta-llama/llama-3.1-8b-instruct",
         "google/gemma-3-4b-it",
         "google/gemma-3-12b-it",
         "google/gemma-4-31b-it",
@@ -30,8 +29,7 @@
         "anthropic/claude-sonnet-4",
         "meta-llama/llama-3.3-70b-instruct",
         "deepseek/deepseek-chat-v3-0324",
-        "mistralai/mistral-small-3.1-24b-instruct",
-        "z-ai/glm-4.7"
+        "mistralai/mistral-small-3.1-24b-instruct"
       ],
       "extra_headers": {
         "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
@@ -43,8 +41,6 @@
     "fast": {
       "primary": "mistralai/mistral-nemo",
       "fallbacks": [
-        "meta-llama/llama-3.1-8b-instruct",
-        "google/gemma-3-4b-it",
         "openai/gpt-4.1-nano",
         "gemma-4-31b"
       ]
@@ -53,15 +49,12 @@
       "primary": "gpt-oss-120b",
       "fallbacks": [
         "openai/gpt-oss-120b",
-        "google/gemini-2.5-flash",
-        "openai/gpt-4o-mini",
-        "anthropic/claude-3-haiku",
-        "meta-llama/llama-3.3-70b-instruct"
+        "anthropic/claude-haiku-4.5"
       ]
     },
     "auto": {
       "route_by_difficulty": { "simple": "fast", "complex": "smart" }
     }
   },
-  "retry": { "max_attempts": 3, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
+  "retry": { "max_attempts": 4, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
 }

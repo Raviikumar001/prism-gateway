@@ -2,6 +2,7 @@ package route
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/raviikumar001/prism-gateway/internal/gatewaycfg"
 )
@@ -15,6 +16,11 @@ type Resolution struct {
 
 type Resolver struct {
 	cfg *gatewaycfg.Config
+}
+
+type ModelInfo struct {
+	ID      string
+	OwnedBy string
 }
 
 func NewResolver(cfg *gatewaycfg.Config) *Resolver {
@@ -73,4 +79,39 @@ func (r *Resolver) Resolve(requested string) (*Resolution, error) {
 		ResolvedModel:  requested,
 		Chain:          []string{requested},
 	}, nil
+}
+
+func (r *Resolver) Models() []ModelInfo {
+	seen := make(map[string]ModelInfo)
+	for name, alias := range r.cfg.Aliases {
+		seen[name] = ModelInfo{ID: name, OwnedBy: "prism"}
+		for _, id := range append([]string{alias.Primary}, alias.Fallbacks...) {
+			if id == "" {
+				continue
+			}
+			if provider, ok := r.cfg.ProviderForModel(id); ok {
+				seen[id] = ModelInfo{ID: id, OwnedBy: provider.Name}
+			}
+		}
+	}
+	for _, provider := range r.cfg.Providers {
+		for _, model := range provider.Models {
+			seen[model] = ModelInfo{ID: model, OwnedBy: provider.Name}
+		}
+	}
+	out := make([]ModelInfo, 0, len(seen))
+	for _, model := range seen {
+		out = append(out, model)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func (r *Resolver) Model(id string) (ModelInfo, bool) {
+	for _, model := range r.Models() {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	return ModelInfo{}, false
 }

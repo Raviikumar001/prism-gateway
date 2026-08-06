@@ -7,7 +7,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/budget"
 	"github.com/raviikumar001/prism-gateway/internal/cache"
@@ -17,6 +16,7 @@ import (
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
 	"github.com/raviikumar001/prism-gateway/internal/route"
+	"github.com/redis/go-redis/v9"
 )
 
 type Server struct {
@@ -68,6 +68,8 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/health", s.handleHealth)
+	r.Get("/v1/models", s.handleModels)
+	r.Get("/v1/models/*", s.handleModel)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
 	s.mountAdmin(r)
 	consoleui.Mount(r)

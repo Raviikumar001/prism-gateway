@@ -2,13 +2,14 @@ package budget_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/raviikumar001/prism-gateway/internal/budget"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestReserveSettleAndSecondReject(t *testing.T) {
@@ -88,5 +89,38 @@ func TestConcurrentReserveNoOverAdmit(t *testing.T) {
 	}
 	if allowed.Load() < 1 {
 		t.Fatalf("expected at least one admit")
+	}
+}
+
+func TestRefreshExtendsReservationAndDetectsSettlement(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	svc := budget.NewService(rdb)
+	ctx := context.Background()
+
+	rsv, err := svc.Reserve(ctx, "stream", 10_000, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zkey := "budget:stream:" + rsv.Month + ":z"
+	if err := rdb.ZAdd(ctx, zkey, redis.Z{Score: 1, Member: rsv.ID}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Refresh(ctx, rsv); err != nil {
+		t.Fatal(err)
+	}
+	score, err := rdb.ZScore(ctx, zkey, rsv.ID).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if score <= 1 {
+		t.Fatalf("reservation score was not extended: %f", score)
+	}
+
+	if err := svc.Settle(ctx, rsv, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Refresh(ctx, rsv); !errors.Is(err, budget.ErrReservationGone) {
+		t.Fatalf("expected settled reservation to be gone, got %v", err)
 	}
 }

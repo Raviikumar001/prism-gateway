@@ -13,11 +13,11 @@ import (
 
 type seedKeysFile struct {
 	Tenants []struct {
-		Team              string   `json:"team"`
-		VirtualKey        string   `json:"virtual_key"`
-		MonthlyBudgetUSD  float64  `json:"monthly_budget_usd"`
-		ModelAllowlist    []string `json:"model_allowlist"`
-		RateLimit         struct {
+		Team             string   `json:"team"`
+		VirtualKey       string   `json:"virtual_key"`
+		MonthlyBudgetUSD float64  `json:"monthly_budget_usd"`
+		ModelAllowlist   []string `json:"model_allowlist"`
+		RateLimit        struct {
 			RequestsPerMinute int `json:"requests_per_minute"`
 			TokensPerMinute   int `json:"tokens_per_minute"`
 		} `json:"rate_limit"`

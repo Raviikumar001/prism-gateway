@@ -9,14 +9,13 @@ import (
 func TestProviderForModelExplicitList(t *testing.T) {
 	cfg := &Config{
 		Providers: []Provider{
-			{Name: "cerebras", Models: []string{"gemma-4-31b", "gpt-oss-120b", "zai-glm-4.7"}},
+			{Name: "cerebras", Models: []string{"gemma-4-31b", "gpt-oss-120b"}},
 			{Name: "openrouter", Models: []string{"mistralai/mistral-nemo", "google/gemma-4-31b-it", "openai/gpt-oss-120b"}},
 		},
 	}
 	cases := map[string]string{
 		"gemma-4-31b":            "cerebras",
 		"gpt-oss-120b":           "cerebras",
-		"zai-glm-4.7":            "cerebras",
 		"mistralai/mistral-nemo": "openrouter",
 		"google/gemma-4-31b-it":  "openrouter",
 		"openai/gpt-oss-120b":    "openrouter",
@@ -84,5 +83,34 @@ func TestLoadLiveConfig(t *testing.T) {
 	}
 	if _, ok := cfg.ProviderForModel("mistralai/mistral-nemo"); !ok {
 		t.Fatal("openrouter mistral not mapped")
+	}
+}
+
+func TestValidateRejectsUnreachableFallback(t *testing.T) {
+	cfg := &Config{
+		Providers: []Provider{
+			{Name: "one", BaseURL: "http://one", Models: []string{"one-a"}},
+			{Name: "two", BaseURL: "http://two", Models: []string{"two-a"}},
+		},
+		Aliases: map[string]Alias{
+			"fast": {Primary: "one-a", Fallbacks: []string{"two-a"}},
+		},
+		Retry: Retry{MaxAttempts: 1},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected max_attempts validation error")
+	}
+}
+
+func TestValidateRejectsAmbiguousModelOwner(t *testing.T) {
+	cfg := &Config{
+		Providers: []Provider{
+			{Name: "one", BaseURL: "http://one", Models: []string{"shared"}},
+			{Name: "two", BaseURL: "http://two", Models: []string{"shared"}},
+		},
+		Retry: Retry{MaxAttempts: 1},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected duplicate model owner validation error")
 	}
 }

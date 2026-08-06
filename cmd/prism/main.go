@@ -79,7 +79,7 @@ func main() {
 
 	authSvc := auth.NewService(db)
 	resolver := route.NewResolver(gwCfg)
-	exec := provider.NewExecutor(gwCfg, 30*time.Second, 64)
+	exec := provider.NewExecutor(gwCfg, cfg.UpstreamTimeout, 64)
 	meterSvc := meter.NewService(db)
 	rpm := limit.NewRPM(rdb)
 	_ = rpm.EnsureScript(ctx)

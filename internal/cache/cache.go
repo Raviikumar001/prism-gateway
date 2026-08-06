@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/raviikumar001/prism-gateway/internal/embed"
@@ -25,7 +26,7 @@ type Stats struct {
 
 type Hit struct {
 	Body       json.RawMessage
-	Kind       string  // exact | semantic
+	Kind       string // exact | semantic
 	Similarity float64
 }
 
@@ -79,6 +80,16 @@ func Normalize(messages []string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// Key keeps routing metadata separate from normalized prompt text. The
+// delimiter survives Normalize-style whitespace handling and lets semantic
+// lookup scope candidates to the same requested model.
+func Key(scope, variant, prompt string) string {
+	scope = strings.TrimSpace(scope)
+	variant = strings.TrimSpace(variant)
+	prompt = Normalize([]string{prompt})
+	return scope + " :: " + variant + " :: " + prompt
+}
+
 func PromptHash(virtualKey, normalized string) string {
 	sum := sha256.Sum256([]byte(virtualKey + "\n" + normalized))
 	return hex.EncodeToString(sum[:])
@@ -89,6 +100,7 @@ func (s *Service) Lookup(ctx context.Context, virtualKey, normalized string, thr
 		s.stats.Misses.Add(1)
 		return nil, nil
 	}
+	scope, prompt := cacheScopeAndPrompt(normalized)
 	hash := PromptHash(virtualKey, normalized)
 
 	var body []byte
@@ -101,30 +113,50 @@ func (s *Service) Lookup(ctx context.Context, virtualKey, normalized string, thr
 		s.stats.HitsExact.Add(1)
 		return &Hit{Body: body, Kind: "exact", Similarity: 1}, nil
 	}
+	if err != pgx.ErrNoRows {
+		return nil, fmt.Errorf("cache exact lookup: %w", err)
+	}
 
 	if threshold <= 0 {
 		threshold = 0.8
 	}
 	vec := s.embedder.Embed(normalized)
-	_, _ = s.db.Exec(ctx, `SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)`)
 
-	var sim float64
-	err = s.db.QueryRow(ctx, `
-		SELECT response_body, 1 - (embedding <=> $1) AS similarity
+	rows, err := s.db.Query(ctx, `
+		SELECT id, response_body, prompt_text, 1 - (embedding <=> $1) AS similarity
 		FROM cache_entries
 		WHERE virtual_key = $2
+		  AND ($4 = '' OR split_part(prompt_text, ' :: ', 1) = $4)
 		  AND embedding IS NOT NULL
 		  AND 1 - (embedding <=> $1) >= $3
 		ORDER BY embedding <=> $1
-		LIMIT 1
-	`, pgvector.NewVector(vec), virtualKey, threshold).Scan(&body, &sim)
+		LIMIT 8
+	`, pgvector.NewVector(vec), virtualKey, threshold, scope)
 	if err != nil {
-		s.stats.Misses.Add(1)
-		return nil, nil // miss (including no rows); fail open
+		return nil, fmt.Errorf("cache semantic lookup: %w", err)
 	}
-	s.stats.HitsSemantic.Add(1)
-	slog.Info("semantic cache hit", "virtual_key", virtualKey, "similarity", sim)
-	return &Hit{Body: body, Kind: "semantic", Similarity: sim}, nil
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var candidateText string
+		var sim float64
+		if err := rows.Scan(&id, &body, &candidateText, &sim); err != nil {
+			return nil, fmt.Errorf("cache semantic scan: %w", err)
+		}
+		_, _, candidatePrompt := splitCacheKey(candidateText)
+		if !semanticRelated(prompt, candidatePrompt) {
+			continue
+		}
+		_, _ = s.db.Exec(ctx, `UPDATE cache_entries SET hit_count = hit_count + 1 WHERE id = $1`, id)
+		s.stats.HitsSemantic.Add(1)
+		slog.Info("semantic cache hit", "virtual_key", virtualKey, "similarity", sim)
+		return &Hit{Body: body, Kind: "semantic", Similarity: sim}, nil
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cache semantic rows: %w", err)
+	}
+	s.stats.Misses.Add(1)
+	return nil, nil
 }
 
 func (s *Service) Store(ctx context.Context, virtualKey, normalized string, response json.RawMessage) error {
@@ -159,4 +191,123 @@ func LastUserContents(roles, contents []string) string {
 		return ""
 	}
 	return contents[len(contents)-1]
+}
+
+func cacheScopeAndPrompt(normalized string) (string, string) {
+	scope, _, prompt := splitCacheKey(normalized)
+	return scope, prompt
+}
+
+func splitCacheKey(normalized string) (string, string, string) {
+	parts := strings.SplitN(normalized, " :: ", 3)
+	if len(parts) != 3 {
+		return "", "", normalized
+	}
+	return parts[0], parts[1], parts[2]
+}
+
+func semanticRelated(query, candidate string) bool {
+	queryVolatile := volatileWords(query)
+	candidateVolatile := volatileWords(candidate)
+	if len(queryVolatile) != len(candidateVolatile) {
+		return false
+	}
+	for word := range queryVolatile {
+		if _, ok := candidateVolatile[word]; !ok {
+			return false
+		}
+	}
+
+	queryWords := semanticWords(query)
+	candidateWords := semanticWords(candidate)
+	if len(queryWords) == 0 || len(candidateWords) == 0 {
+		return false
+	}
+	shared := 0
+	for word := range queryWords {
+		if _, ok := candidateWords[word]; ok {
+			shared++
+		}
+	}
+	if shared >= 2 {
+		return true
+	}
+	return shared == 1 && len(queryWords) <= 2 && len(candidateWords) <= 2
+}
+
+func semanticWords(text string) map[string]struct{} {
+	var words []string
+	var current strings.Builder
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		word := strings.ToLower(current.String())
+		current.Reset()
+		if isCacheStopWord(word) || isVolatileWord(word) {
+			return
+		}
+		words = append(words, word)
+	}
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			current.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	out := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		out[word] = struct{}{}
+	}
+	return out
+}
+
+func isCacheStopWord(word string) bool {
+	switch word {
+	case "a", "an", "the", "is", "are", "am", "to", "of", "and", "or",
+		"on", "in", "for", "my", "i", "do", "how", "what", "steps",
+		"with", "that", "this", "it", "me", "please", "can", "you",
+		"if", "we", "our", "your", "from", "about":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVolatileWord(word string) bool {
+	if len(word) < 8 {
+		return false
+	}
+	for _, r := range word {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func volatileWords(text string) map[string]struct{} {
+	out := make(map[string]struct{})
+	var current strings.Builder
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		word := strings.ToLower(current.String())
+		current.Reset()
+		if isVolatileWord(word) {
+			out[word] = struct{}{}
+		}
+	}
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			current.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return out
 }

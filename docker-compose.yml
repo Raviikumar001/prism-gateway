@@ -53,11 +53,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-change-me}
       PROVIDER_MODE: ${PROVIDER_MODE:-mocks}
-      SEED_ON_BOOT: "true"
+      SEED_ON_BOOT: ${SEED_ON_BOOT:-true}
       DATA_DIR: /data
       # Override to /data/gateway_config.live.json for live; default stays mocks.
       GATEWAY_CONFIG: ${GATEWAY_CONFIG:-/data/gateway_config.docker.json}
       LOG_LEVEL: info
+      UPSTREAM_TIMEOUT: ${UPSTREAM_TIMEOUT:-120s}
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     depends_on:
