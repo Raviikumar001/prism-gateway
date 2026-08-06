@@ -21,14 +21,36 @@ func NewResolver(cfg *gatewaycfg.Config) *Resolver {
 	return &Resolver{cfg: cfg}
 }
 
+// ResolvePrompt resolves aliases including auto (needs prompt text for classification).
+func (r *Resolver) ResolvePrompt(requested, prompt string) (*Resolution, error) {
+	if requested == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if requested == "auto" {
+		d := Classify(prompt, DefaultAutoThreshold)
+		aliasName := d.Tier
+		alias, ok := r.cfg.Aliases[aliasName]
+		if !ok || alias.Primary == "" {
+			return nil, fmt.Errorf("auto resolved to %q but alias missing", aliasName)
+		}
+		chain := append([]string{alias.Primary}, alias.Fallbacks...)
+		return &Resolution{
+			RequestedAlias: "auto",
+			ResolvedModel:  alias.Primary,
+			Chain:          chain,
+			RouteReason:    d.Reason,
+		}, nil
+	}
+	return r.Resolve(requested)
+}
+
 // Resolve maps alias or concrete model to an ordered provider model chain.
-// auto is not implemented in phase 1 — returns a clear error.
 func (r *Resolver) Resolve(requested string) (*Resolution, error) {
 	if requested == "" {
 		return nil, fmt.Errorf("model is required")
 	}
 	if requested == "auto" {
-		return nil, fmt.Errorf("auto routing not enabled yet")
+		return nil, fmt.Errorf("auto requires prompt; use ResolvePrompt")
 	}
 
 	if alias, ok := r.cfg.Aliases[requested]; ok {
@@ -43,7 +65,6 @@ func (r *Resolver) Resolve(requested string) (*Resolution, error) {
 		}, nil
 	}
 
-	// Concrete model name
 	if _, ok := r.cfg.ProviderForModel(requested); !ok {
 		return nil, fmt.Errorf("unknown model %q", requested)
 	}

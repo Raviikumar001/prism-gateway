@@ -14,9 +14,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/budget"
+	"github.com/raviikumar001/prism-gateway/internal/cache"
 	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
 	"github.com/raviikumar001/prism-gateway/internal/provider"
+	"github.com/raviikumar001/prism-gateway/internal/route"
 )
 
 type chatRequestBody struct {
@@ -94,14 +96,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.resolver.Resolve(body.Model)
+	contents := make([]string, len(body.Messages))
+	roles := make([]string, len(body.Messages))
+	for i, m := range body.Messages {
+		contents[i] = m.Content
+		roles[i] = m.Role
+	}
+	promptText := cache.LastUserContents(roles, contents)
+	normalized := cache.Normalize([]string{promptText})
+
+	res, err := s.resolver.ResolvePrompt(body.Model, promptText)
 	if err != nil {
 		status := http.StatusNotFound
 		typ := "not_found_error"
-		if body.Model == "auto" {
-			status = http.StatusNotImplemented
-			typ = "invalid_request_error"
-		}
 		writeAPIError(w, status, typ, err.Error())
 		return
 	}
@@ -115,10 +122,31 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contents := make([]string, len(body.Messages))
-	for i, m := range body.Messages {
-		contents[i] = m.Content
+	if tenant.CacheEnabled && !body.Stream {
+		hit, _ := s.cache.Lookup(ctx, tenant.VirtualKey, normalized, tenant.CacheThreshold)
+		if hit != nil {
+			s.bumpCacheHit(context.WithoutCancel(ctx), tenant.VirtualKey)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("x-prism-provider", "cache")
+			w.Header().Set("x-prism-cache", "hit")
+			w.Header().Set("x-prism-fallback", "false")
+			w.Header().Set("x-prism-cost-usd", "0")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(hit.Body)
+			s.logger.Enqueue(logEntry{
+				RequestID:      uuid.NewString(),
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				ResolvedModel:  primary,
+				Status:         "ok",
+				Cache:          "hit",
+				RouteReason:    res.RouteReason,
+				LatencyMs:      int(time.Since(start).Milliseconds()),
+			})
+			return
+		}
 	}
+
 	estimate := meter.EstimateMicroCents(meter.EstimatePromptTokens(contents...), meter.ReserveCompletionTokens, price)
 	budgetLimit := int64(math.Round(tenant.MonthlyBudgetUSD * 100_000_000.0))
 
@@ -131,6 +159,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			RequestedModel: body.Model,
 			ResolvedModel:  primary,
 			Status:         "rejected_budget",
+			RouteReason:    res.RouteReason,
 			LatencyMs:      int(time.Since(start).Milliseconds()),
 		})
 		return
@@ -151,7 +180,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if body.Stream {
-		s.handleStream(w, r, tenant, body, res.Chain, start, &actualCost)
+		s.handleStream(w, r, tenant, body, res, start, &actualCost)
 		return
 	}
 
@@ -196,6 +225,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, result.Response.Usage.PromptTokens, result.Response.Usage.CompletionTokens, actualCost)
+	if tenant.CacheEnabled {
+		if err := s.cache.Store(context.WithoutCancel(ctx), tenant.VirtualKey, normalized, result.Response.Raw); err != nil {
+			slog.Error("cache store failed", "err", err)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-prism-provider", result.Provider+"/"+result.Model)
@@ -217,6 +251,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		CostMicroCents:   actualCost,
 		Cache:            "miss",
 		Fallback:         result.Fallback,
+		RouteReason:      res.RouteReason,
 		Retries:          result.Retries,
 		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
@@ -227,11 +262,12 @@ func (s *Server) handleStream(
 	r *http.Request,
 	tenant *auth.Tenant,
 	body chatRequestBody,
-	chain []string,
+	res *route.Resolution,
 	start time.Time,
 	actualCost *int64,
 ) {
 	ctx := r.Context()
+	chain := res.Chain
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Streaming unsupported")
@@ -331,6 +367,7 @@ func (s *Server) handleStream(
 		CostMicroCents:   *actualCost,
 		Cache:            "miss",
 		Fallback:         fallback,
+		RouteReason:      res.RouteReason,
 		Retries:          retries,
 		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
@@ -349,6 +386,20 @@ func (s *Server) bumpUsage(ctx context.Context, virtualKey string, prompt, compl
 	`, virtualKey, month, prompt, completion, costMicroCents)
 	if err != nil {
 		slog.Error("usage_monthly upsert failed", "err", err)
+	}
+}
+
+func (s *Server) bumpCacheHit(ctx context.Context, virtualKey string) {
+	month := time.Now().UTC().Format("200601")
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO usage_monthly (virtual_key, month, requests, cache_hits)
+		VALUES ($1, $2, 1, 1)
+		ON CONFLICT (virtual_key, month) DO UPDATE SET
+			requests = usage_monthly.requests + 1,
+			cache_hits = usage_monthly.cache_hits + 1
+	`, virtualKey, month)
+	if err != nil {
+		slog.Error("cache hit usage upsert failed", "err", err)
 	}
 }
 

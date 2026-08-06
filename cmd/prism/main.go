@@ -11,6 +11,7 @@ import (
 
 	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/budget"
+	"github.com/raviikumar001/prism-gateway/internal/cache"
 	"github.com/raviikumar001/prism-gateway/internal/config"
 	"github.com/raviikumar001/prism-gateway/internal/gatewaycfg"
 	"github.com/raviikumar001/prism-gateway/internal/httpapi"
@@ -73,10 +74,11 @@ func main() {
 	rpm := limit.NewRPM(rdb)
 	_ = rpm.EnsureScript(ctx)
 	budgetSvc := budget.NewService(rdb)
+	cacheSvc := cache.NewService(db)
 	reqLogger := httpapi.NewRequestLogger(db)
 	defer reqLogger.Close()
 
-	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, exec, meterSvc, rpm, budgetSvc, reqLogger)
+	srv := httpapi.NewServer(cfg, db, rdb, authSvc, resolver, exec, meterSvc, rpm, budgetSvc, cacheSvc, reqLogger)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Router(),

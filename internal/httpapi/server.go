@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/raviikumar001/prism-gateway/internal/auth"
 	"github.com/raviikumar001/prism-gateway/internal/budget"
+	"github.com/raviikumar001/prism-gateway/internal/cache"
 	"github.com/raviikumar001/prism-gateway/internal/config"
 	"github.com/raviikumar001/prism-gateway/internal/limit"
 	"github.com/raviikumar001/prism-gateway/internal/meter"
@@ -27,6 +28,7 @@ type Server struct {
 	meter    *meter.Service
 	rpm      *limit.RPM
 	budget   *budget.Service
+	cache    *cache.Service
 	logger   *RequestLogger
 }
 
@@ -40,6 +42,7 @@ func NewServer(
 	meterSvc *meter.Service,
 	rpm *limit.RPM,
 	budgetSvc *budget.Service,
+	cacheSvc *cache.Service,
 	logger *RequestLogger,
 ) *Server {
 	return &Server{
@@ -52,6 +55,7 @@ func NewServer(
 		meter:    meterSvc,
 		rpm:      rpm,
 		budget:   budgetSvc,
+		cache:    cacheSvc,
 		logger:   logger,
 	}
 }
@@ -61,7 +65,6 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	// Do not use middleware.Timeout here — it buffers via http.TimeoutHandler and breaks SSE.
 
 	r.Get("/health", s.handleHealth)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)

@@ -7,7 +7,7 @@
       "monthly_budget_usd": 50,
       "rate_limit": { "requests_per_minute": 60, "tokens_per_minute": 100000 },
       "model_allowlist": ["fast"],
-      "semantic_cache": { "enabled": true, "similarity_threshold": 0.92 }
+      "semantic_cache": { "enabled": true, "similarity_threshold": 0.80 }
     },
     {
       "team": "research",

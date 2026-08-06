@@ -15,6 +15,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 		ar.Get("/usage", s.handleAdminUsage)
 		ar.Get("/logs", s.handleAdminLogs)
 		ar.Get("/providers/health", s.handleAdminProvidersHealth)
+		ar.Get("/cache/stats", s.handleAdminCacheStats)
 	})
 }
 
@@ -132,4 +133,8 @@ func (s *Server) handleAdminProvidersHealth(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers": s.exec.HealthSnapshot(),
 	})
+}
+
+func (s *Server) handleAdminCacheStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.cache.Snapshot())
 }
