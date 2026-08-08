@@ -1,0 +1,58 @@
+{
+  "started_at": "2026-08-08T17:50:32.284025+00:00",
+  "url": "https://gateway-production-e22b.up.railway.app",
+  "checks": {
+    "health": {
+      "ok": true,
+      "status": 200,
+      "body": {
+        "status": "ok",
+        "checks": {
+          "postgres": "up",
+          "redis": "up"
+        },
+        "provider_mode": "live"
+      }
+    },
+    "smoke": {
+      "ok": true,
+      "exit_code": 0,
+      "log": "/Volumes/new/web/assignment/prism-gateway/verification/evaluate_smoke.txt"
+    },
+    "load": {
+      "ok": true,
+      "exit_code": 0,
+      "log": "/Volumes/new/web/assignment/prism-gateway/verification/evaluate_load.txt"
+    },
+    "routing": {
+      "ok": true,
+      "exit_code": 0,
+      "summary": {
+        "feature_accuracy": 1,
+        "length_accuracy": 0.4,
+        "feature_correct": 20,
+        "length_correct": 8,
+        "total": 20
+      },
+      "log": "/Volumes/new/web/assignment/prism-gateway/verification/evaluate_routing.json"
+    },
+    "budget": {
+      "ok": true,
+      "status": 429,
+      "error_type": "budget_exceeded",
+      "body": {
+        "error": {
+          "code": "budget_exceeded",
+          "message": "Monthly budget exceeded",
+          "type": "budget_exceeded"
+        }
+      }
+    },
+    "coding_agent": {
+      "ok": true,
+      "skipped": true
+    }
+  },
+  "finished_at": "2026-08-08T17:51:24.339763+00:00",
+  "ok": true
+}

@@ -1,0 +1,14 @@
+Bursting 50 requests at concurrency 10 ...
+
+Burst finished in 16.5s
+  accepted (200):      50
+  rate limited (429):  0
+  latency avg/p95 ms:  2993 / 4544
+
+Client-side accounting totals - compare with your usage API for this key:
+  accepted requests:   50
+  prompt tokens:       1321
+  completion tokens:   800
+  sum of cost headers: 0.000049 USD (50 of 50 had a numeric header)
+
+Over-admission check OK: 50 accepted <= limit 300.

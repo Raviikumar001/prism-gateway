@@ -1,0 +1,104 @@
+
+============================================================
+  1) Health
+============================================================
+  HTTP 200: {'status': 'ok', 'checks': {'postgres': 'up', 'redis': 'up'}, 'provider_mode': 'live'}
+
+============================================================
+  2) Smoke (scripts/smoke_test.py)
+============================================================
+
+[1] Non-streaming completion + header contract
+  PASS  returns 200  (got 200)
+  PASS  body has choices and usage
+  PASS  header x-prism-provider present  (openrouter/mistralai/mistral-nemo)
+  PASS  header x-prism-cache present  (miss)
+  PASS  header x-prism-cost-usd present  (0.00001131)
+  PASS  first request is a cache miss  (miss)
+
+[2] Streaming
+  PASS  returns 200  (got 200)
+  PASS  content-type is text/event-stream  (text/event-stream)
+  PASS  received multiple SSE chunks  (389 data lines)
+  PASS  stream ends with [DONE]
+
+[3] Auth
+  PASS  invalid key rejected with 401/403  (got 401)
+
+[4] Unknown model
+  PASS  unknown model rejected with 4xx  (got 403)
+  PASS  error body explains the problem  ({'error': {'code': 'model_not_allowed', 'message': "Model is not on this key's a)
+
+[5] Semantic cache: exact repeat
+  PASS  identical repeat is a cache hit  (hit)
+
+[6] Semantic cache: paraphrases (each pair soft; at least one pair must hit)
+  PASS  pair A paraphrase is a cache hit  (hit)
+  WARN  pair B paraphrase is a cache hit  (miss)
+  PASS  matching is semantic, not exact-only (at least one pair hit)
+
+[7] Semantic cache: unrelated prompt
+  PASS  unrelated prompt is a cache miss  (miss)
+
+[7b] Semantic cache: time-sensitive prompts stay uncached
+  PASS  time-sensitive repeat is a cache miss  (miss)
+
+[8] Admin + console
+  PASS  providers health  (got 200)
+  PASS  cache stats  (got 200)
+  PASS  usage from/to  (got 200 from=2026-08-01 to=2026-08-08)
+  PASS  logs  (got 200)
+  PASS  ops console HTML  (got 200)
+
+[8b] Rejection logging
+  PASS  invalid auth is logged  (statuses=['ok', 'rejected_allowlist', 'rejected_auth', 'rejected_malformed', 'rejected_rpm'])
+  PASS  malformed request is logged  (statuses=['ok', 'rejected_allowlist', 'rejected_auth', 'rejected_malformed', 'rejected_rpm'])
+
+==================================================
+  25 passed, 1 warnings, 0 failed
+
+============================================================
+  3) Load / over-admission (scripts/load_test.py)
+============================================================
+Bursting 30 requests at concurrency 10 ...
+
+Burst finished in 8.7s
+  accepted (200):      10
+  rate limited (429):  20
+  latency avg/p95 ms:  4468 / 4142
+
+Client-side accounting totals - compare with your usage API for this key:
+  accepted requests:   10
+  prompt tokens:       280
+  completion tokens:   640
+  sum of cost headers: 0.000024 USD (10 of 10 had a numeric header)
+
+Over-admission check OK: 10 accepted <= limit 10.
+
+============================================================
+  4) Routing eval (cmd/routeval)
+============================================================
+feature_accuracy=1.00 (20/20)
+length_accuracy=0.40 (8/20)
+wrote /Volumes/new/web/assignment/prism-gateway/verification/evaluate_routing.json
+  feature_accuracy=1 (20/20)  length_accuracy=0.4 (8/20)
+
+============================================================
+  5) Budget rejection probe
+============================================================
+  status=429 error_type=budget_exceeded body_snip={'error': {'code': 'budget_exceeded', 'message': 'Monthly budget exceeded', 'type': 'budget_exceeded'}}
+
+============================================================
+  SCORECARD
+============================================================
+  PASS  health
+  PASS  smoke
+  PASS  load
+  PASS  routing
+  PASS  budget
+  SKIP  coding_agent
+
+Wrote /Volumes/new/web/assignment/prism-gateway/verification/evaluate_report.json
+Wrote /Volumes/new/web/assignment/prism-gateway/verification/evaluate_report.txt
+
+Overall: PASS

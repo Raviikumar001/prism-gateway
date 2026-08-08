@@ -1,0 +1,14 @@
+Bursting 200 requests at concurrency 25 ...
+
+Burst finished in 17.4s
+  accepted (200):      200
+  rate limited (429):  0
+  latency avg/p95 ms:  1940 / 5694
+
+Client-side accounting totals - compare with your usage API for this key:
+  accepted requests:   200
+  prompt tokens:       5251
+  completion tokens:   3200
+  sum of cost headers: 0.000195 USD (200 of 200 had a numeric header)
+
+Over-admission check OK: 200 accepted <= limit 300.

@@ -118,6 +118,9 @@ def main():
     validate_gateway_config(DATA_DIR / "gateway_config.live.json", priced_models)
     validate_gateway_config(DATA_DIR / "gateway_config.docker.json", priced_models)
 
+    live = read_json(DATA_DIR / "gateway_config.live.json")
+    known_aliases = set(aliases) | set(live.get("model_aliases", {}))
+
     keys_seen = set()
     for tenant in seed["tenants"]:
         for field in ("team", "virtual_key", "monthly_budget_usd", "rate_limit", "model_allowlist", "semantic_cache"):
@@ -129,7 +132,7 @@ def main():
         for allowed in tenant["model_allowlist"]:
             if allowed == "*":
                 continue
-            if allowed not in aliases and allowed not in priced_models:
+            if allowed not in known_aliases and allowed not in priced_models:
                 raise ValueError(f"Tenant '{tenant['team']}' allowlists unknown model/alias '{allowed}'")
         cache = tenant["semantic_cache"]
         if cache.get("enabled") and not 0 < cache.get("similarity_threshold", 0) <= 1:

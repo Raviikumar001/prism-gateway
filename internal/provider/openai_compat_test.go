@@ -195,3 +195,22 @@ func TestChatCompletionAcceptsStructuredResponseContent(t *testing.T) {
 		t.Fatalf("structured response was not preserved: %s", response.Raw)
 	}
 }
+
+
+func TestCoalesceReasoningIntoContent(t *testing.T) {
+	raw := []byte(`{"choices":[{"message":{"role":"assistant","content":null,"reasoning":"Hello from reasoning"}}]}`)
+	got := coalesceReasoningIntoContent(raw)
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Choices[0].Message.Content != "Hello from reasoning" {
+		t.Fatalf("content=%q", payload.Choices[0].Message.Content)
+	}
+}

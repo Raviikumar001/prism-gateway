@@ -1,0 +1,15 @@
+Bursting 30 requests at concurrency 5 ...
+
+Burst finished in 67.3s
+  accepted (200):      28
+  rate limited (429):  0
+  other outcomes:      2  ['error: TimeoutError']
+  latency avg/p95 ms:  1549 / 2305
+
+Client-side accounting totals - compare with your usage API for this key:
+  accepted requests:   28
+  prompt tokens:       2360
+  completion tokens:   448
+  sum of cost headers: 0.000343 USD (28 of 28 had a numeric header)
+
+NOTE: burst took 67s (>1 minute); over-admission check is only meaningful for bursts inside one rate-limit window.

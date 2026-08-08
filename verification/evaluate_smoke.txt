@@ -1,0 +1,49 @@
+
+[1] Non-streaming completion + header contract
+  PASS  returns 200  (got 200)
+  PASS  body has choices and usage
+  PASS  header x-prism-provider present  (openrouter/mistralai/mistral-nemo)
+  PASS  header x-prism-cache present  (miss)
+  PASS  header x-prism-cost-usd present  (0.00001131)
+  PASS  first request is a cache miss  (miss)
+
+[2] Streaming
+  PASS  returns 200  (got 200)
+  PASS  content-type is text/event-stream  (text/event-stream)
+  PASS  received multiple SSE chunks  (389 data lines)
+  PASS  stream ends with [DONE]
+
+[3] Auth
+  PASS  invalid key rejected with 401/403  (got 401)
+
+[4] Unknown model
+  PASS  unknown model rejected with 4xx  (got 403)
+  PASS  error body explains the problem  ({'error': {'code': 'model_not_allowed', 'message': "Model is not on this key's a)
+
+[5] Semantic cache: exact repeat
+  PASS  identical repeat is a cache hit  (hit)
+
+[6] Semantic cache: paraphrases (each pair soft; at least one pair must hit)
+  PASS  pair A paraphrase is a cache hit  (hit)
+  WARN  pair B paraphrase is a cache hit  (miss)
+  PASS  matching is semantic, not exact-only (at least one pair hit)
+
+[7] Semantic cache: unrelated prompt
+  PASS  unrelated prompt is a cache miss  (miss)
+
+[7b] Semantic cache: time-sensitive prompts stay uncached
+  PASS  time-sensitive repeat is a cache miss  (miss)
+
+[8] Admin + console
+  PASS  providers health  (got 200)
+  PASS  cache stats  (got 200)
+  PASS  usage from/to  (got 200 from=2026-08-01 to=2026-08-08)
+  PASS  logs  (got 200)
+  PASS  ops console HTML  (got 200)
+
+[8b] Rejection logging
+  PASS  invalid auth is logged  (statuses=['ok', 'rejected_allowlist', 'rejected_auth', 'rejected_malformed', 'rejected_rpm'])
+  PASS  malformed request is logged  (statuses=['ok', 'rejected_allowlist', 'rejected_auth', 'rejected_malformed', 'rejected_rpm'])
+
+==================================================
+  25 passed, 1 warnings, 0 failed

@@ -184,7 +184,8 @@ def main():
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
-        month_start = now.strftime("%Y-%m-01")        for path, name, check in (
+        month_start = now.strftime("%Y-%m-01")
+        for path, name, check in (
             ("/admin/providers/health", "providers health", None),
             ("/admin/cache/stats", "cache stats", None),
             (f"/admin/usage?key={args.key}&from={month_start}&to={today}", "usage from/to", "usage"),
@@ -214,6 +215,7 @@ def main():
                 record(name, ok, f"got {code}")
             else:
                 record(name, code == 200 and isinstance(body, dict), f"got {code}")
+
         print("\n[8b] Rejection logging")
         post_chat(args.url, "prism-sk-invalid-key", simple_body(args.model, "hello"))
         post_chat(args.url, args.key, {"model": args.model, "messages": []})

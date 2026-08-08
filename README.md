@@ -84,9 +84,12 @@ With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/ga
 
 | Alias | Primary | Fallbacks |
 |---|---|---|
-| `fast` | OpenRouter `mistralai/mistral-nemo` (cheap) | GPT-4.1 nano → Cerebras Gemma 4 31B |
-| `smart` | Cerebras `gpt-oss-120b` | OpenRouter GPT OSS → Claude Haiku 4.5 |
+| `fast` | OpenRouter `openai/gpt-5.6-luna` | GPT-4o mini → Mistral Nemo → Cerebras Gemma |
+| `smart` | OpenRouter `openai/gpt-5.6-luna-pro` | GPT-5.4 → Claude Sonnet 5 → Cerebras `zai-glm-4.7` → Qwen3 Coder Plus |
+| `code` | OpenRouter `qwen/qwen3-coder` | Codestral → Luna → DeepSeek V4 Flash |
 | `auto` | difficulty → `fast` (simple) / `smart` (complex) | same chains as above |
+
+Live catalog also exposes direct model IDs (OpenAI GPT-4.1/5.4/Luna, Claude, Gemini, DeepSeek, Qwen coder, Cerebras GLM, …) for keys with `*` allowlist.
 
 Live OpenRouter base URL: `https://openrouter.ai/api/v1`. We do **not** expose the full OpenRouter catalog — a curated mix of 18 active models covering cheap OSS plus Google / OpenAI / Anthropic. Research key allowlist includes `*` so those model IDs can be requested directly. Archived and scheduled-for-deprecation models are excluded.
 
@@ -238,6 +241,25 @@ Ops console also surfaces **provider / breaker health** via `/admin/providers/he
 
 Design notes live under `docs/` locally (not committed). See `docs/ARCHITECTURE.md` and `docs/BUILD_PLAN.md`.
 
+## Evaluate (reviewers / TAs)
+
+One command runs health + smoke + load + routing + budget probe and prints a scorecard:
+
+```bash
+# Live Railway
+python3 scripts/evaluate.py \
+  --url https://gateway-production-e22b.up.railway.app \
+  --admin-token "$ADMIN_TOKEN"
+
+# Local mocks (+ optional failover)
+python3 scripts/evaluate.py --url http://localhost:8080 \
+  --admin-token dev-admin-change-me --check-failover
+```
+
+Details: [`EVAL.md`](EVAL.md). Artifacts land in `verification/evaluate_report.*`.
+
+OpenCode users: see [`OPENCODE.md`](OPENCODE.md) / [`opencode.json`](opencode.json).
+
 ## Development
 
 ```bash
@@ -256,7 +278,7 @@ python3 scripts/load_test.py  --url http://localhost:8080 --key prism-sk-free-7g
 
 Local planning notes (gitignored): `docs/BUILD_PLAN.md`, `docs/PROVIDERS.md`, `docs/CONFIGURATION.md`.
 
-Verification artifacts and the assignment report: [`VERIFICATION.md`](VERIFICATION.md), [`DEMO.md`](DEMO.md), [`verification/`](verification/).
+Verification artifacts and the assignment report: [`VERIFICATION.md`](VERIFICATION.md), [`DEMO.md`](DEMO.md), [`EVAL.md`](EVAL.md), [`verification/`](verification/).
 
 ## License
 

@@ -12,8 +12,9 @@ export ADMIN_TOKEN=dev-admin-change-me   # match .env
 
 Open:
 
-- Chat: terminal + `curl` / OpenCode pointing at `http://localhost:8080/v1`
-- Ops console: `http://localhost:8080/console/`
+- Public deploy: `https://gateway-production-e22b.up.railway.app`
+- Chat: terminal + `curl` / OpenCode pointing at that host’s `/v1`
+- Ops console: `https://gateway-production-e22b.up.railway.app/console/`
 
 ## Suggested outline
 

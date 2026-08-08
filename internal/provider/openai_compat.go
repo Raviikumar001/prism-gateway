@@ -372,6 +372,93 @@ func (c *OpenAICompat) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("decode upstream response: %w", err)
 	}
+	body = coalesceReasoningIntoContent(body)
+	_ = json.Unmarshal(body, &out)
 	out.Raw = body
 	return &out, nil
+}
+
+// coalesceReasoningIntoContent copies reasoning text into message.content when
+// content is empty. Reasoning models (gpt-oss, zai-glm, etc.) often burn the
+ // completion budget on reasoning and leave content blank, which breaks agents.
+func coalesceReasoningIntoContent(body []byte) []byte {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(body, &payload) != nil {
+		return body
+	}
+	rawChoices, ok := payload["choices"]
+	if !ok {
+		return body
+	}
+	var choices []map[string]json.RawMessage
+	if json.Unmarshal(rawChoices, &choices) != nil || len(choices) == 0 {
+		return body
+	}
+	changed := false
+	for i := range choices {
+		rawMsg, ok := choices[i]["message"]
+		if !ok {
+			continue
+		}
+		var msg map[string]json.RawMessage
+		if json.Unmarshal(rawMsg, &msg) != nil {
+			continue
+		}
+		if !contentEmpty(msg["content"]) {
+			continue
+		}
+		reasoning := stringFromRaw(msg["reasoning"])
+		if reasoning == "" {
+			reasoning = stringFromRaw(msg["reasoning_content"])
+		}
+		if reasoning == "" {
+			continue
+		}
+		encoded, err := json.Marshal(reasoning)
+		if err != nil {
+			continue
+		}
+		msg["content"] = encoded
+		encodedMsg, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+		choices[i]["message"] = encodedMsg
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	encodedChoices, err := json.Marshal(choices)
+	if err != nil {
+		return body
+	}
+	payload["choices"] = encodedChoices
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func contentEmpty(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return true
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s) == ""
+	}
+	return false
+}
+
+func stringFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }

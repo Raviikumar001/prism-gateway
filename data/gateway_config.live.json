@@ -1,11 +1,11 @@
 {
-  "_comment": "Live providers: Cerebras active models + curated OpenRouter mix (cheap OSS + Google/OpenAI/Anthropic).",
+  "_comment": "Live providers: Cerebras (incl. zai-glm) + OpenRouter mix — OpenAI Luna/GPT, Claude, Gemini, DeepSeek, Qwen coder.",
   "providers": [
     {
       "name": "cerebras",
       "base_url": "https://api.cerebras.ai/v1",
       "api_key_env": "CEREBRAS_API_KEY",
-      "models": ["gemma-4-31b", "gpt-oss-120b"]
+      "models": ["zai-glm-4.7", "gpt-oss-120b", "gemma-4-31b"]
     },
     {
       "name": "openrouter",
@@ -13,23 +13,37 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "models": [
         "mistralai/mistral-nemo",
-        "google/gemma-3-4b-it",
-        "google/gemma-3-12b-it",
-        "google/gemma-4-31b-it",
         "openai/gpt-4.1-nano",
         "openai/gpt-4o-mini",
         "openai/gpt-4.1-mini",
+        "openai/gpt-4.1",
         "openai/gpt-4o",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.4",
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro",
         "openai/gpt-oss-120b",
+        "google/gemma-3-4b-it",
+        "google/gemma-3-12b-it",
+        "google/gemma-4-31b-it",
         "google/gemini-2.5-flash-lite",
         "google/gemini-2.5-flash",
         "google/gemini-2.5-pro",
+        "google/gemini-3.5-flash",
+        "google/gemini-3.6-flash",
         "anthropic/claude-3-haiku",
         "anthropic/claude-haiku-4.5",
         "anthropic/claude-sonnet-4",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-opus-4.8",
         "meta-llama/llama-3.3-70b-instruct",
         "deepseek/deepseek-chat-v3-0324",
-        "mistralai/mistral-small-3.1-24b-instruct"
+        "deepseek/deepseek-v4-flash",
+        "mistralai/mistral-small-3.1-24b-instruct",
+        "mistralai/codestral-2508",
+        "qwen/qwen3-coder-flash",
+        "qwen/qwen3-coder",
+        "qwen/qwen3-coder-plus"
       ],
       "extra_headers": {
         "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
@@ -39,22 +53,33 @@
   ],
   "model_aliases": {
     "fast": {
-      "primary": "mistralai/mistral-nemo",
+      "primary": "openai/gpt-5.6-luna",
       "fallbacks": [
-        "openai/gpt-4.1-nano",
+        "openai/gpt-4o-mini",
+        "mistralai/mistral-nemo",
         "gemma-4-31b"
       ]
     },
     "smart": {
-      "primary": "gpt-oss-120b",
+      "primary": "openai/gpt-5.6-luna-pro",
       "fallbacks": [
-        "openai/gpt-oss-120b",
-        "anthropic/claude-haiku-4.5"
+        "openai/gpt-5.4",
+        "anthropic/claude-sonnet-5",
+        "zai-glm-4.7",
+        "qwen/qwen3-coder-plus"
+      ]
+    },
+    "code": {
+      "primary": "qwen/qwen3-coder",
+      "fallbacks": [
+        "mistralai/codestral-2508",
+        "openai/gpt-5.6-luna",
+        "deepseek/deepseek-v4-flash"
       ]
     },
     "auto": {
       "route_by_difficulty": { "simple": "fast", "complex": "smart" }
     }
   },
-  "retry": { "max_attempts": 4, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
+  "retry": { "max_attempts": 5, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
 }

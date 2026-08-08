@@ -1,0 +1,9 @@
+PASS  health
+PASS  smoke
+PASS  load
+PASS  routing
+PASS  budget
+SKIP  coding_agent
+
+overall=PASS
+url=https://gateway-production-e22b.up.railway.app

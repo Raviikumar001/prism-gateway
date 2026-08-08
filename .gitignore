@@ -42,3 +42,4 @@ coverage.out
 # Local planning notes (not part of the product repo)
 /docs/
 /pack-reference/
+.railway-local/
