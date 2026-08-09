@@ -4,6 +4,8 @@ OpenAI-compatible LLM gateway with tenant isolation, budget controls, failover, 
 
 Applications call one endpoint with a virtual key. Prism authenticates the key, enforces allowlists and rate limits, routes to the right model tier, serves cache hits when prompts match by meaning, and meters every token.
 
+> Why did the LLM gateway break up with the model provider? It needed more space to process its feelings.
+
 ```
 Client ──► Prism ──► Cerebras / OpenRouter / mock providers
               │
