@@ -10,6 +10,46 @@ Client ──► Prism ──► Cerebras / OpenRouter / mock providers
          Postgres + Redis
 ```
 
+## Live deploy
+
+Public Railway URL:
+
+**https://gateway-production-e22b.up.railway.app**
+
+| Path | URL |
+|---|---|
+| Health | https://gateway-production-e22b.up.railway.app/health |
+| API base | https://gateway-production-e22b.up.railway.app/v1 |
+| Chat completions | `POST https://gateway-production-e22b.up.railway.app/v1/chat/completions` |
+| Ops console | https://gateway-production-e22b.up.railway.app/console/ |
+
+Demo virtual key: `prism-sk-research-4d5e6f`  
+Admin console token: value of `ADMIN_TOKEN` on the Railway service (local default `dev-admin-change-me`).
+
+### Try the API
+
+```bash
+curl -sS https://gateway-production-e22b.up.railway.app/health | python3 -m json.tool
+
+curl -sS https://gateway-production-e22b.up.railway.app/v1/chat/completions \
+  -H "Authorization: Bearer prism-sk-research-4d5e6f" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast","messages":[{"role":"user","content":"Say hello"}],"max_tokens":32}' \
+  | python3 -m json.tool
+```
+
+### Open the ops console
+
+1. Open https://gateway-production-e22b.up.railway.app/console/ in a browser.
+2. Enter:
+   - **Admin token** — the Railway `ADMIN_TOKEN` (same as local `.env` if unchanged: `dev-admin-change-me`)
+   - **Virtual key** — e.g. `prism-sk-research-4d5e6f` or `prism-sk-search-1a2b3c`
+3. Click **Load**.
+
+You’ll see provider/breaker health, cache stats, usage for that key, and recent request logs (route reason, retries, cost, latency). Use **Refresh** to reload.
+
+Local console is the same flow at `http://localhost:8080/console/` after `docker compose up`.
+
 ## Features
 
 - **OpenAI Chat Completions API** — `POST /v1/chat/completions`, streaming and non-streaming
@@ -197,6 +237,9 @@ Per-key quotas (seeded in Postgres): `monthly_budget_usd`, RPM, **TPM** (tokens/
 ## Deploy on Railway
 
 Prism is designed for Railway: one Go service plus managed Postgres and Redis.
+
+**This project’s live URL:** https://gateway-production-e22b.up.railway.app  
+Ops console: https://gateway-production-e22b.up.railway.app/console/
 
 1. Create a Railway project; add **PostgreSQL** and **Redis**.
 2. Deploy this repo (Dockerfile at repo root).
