@@ -4,10 +4,38 @@ OpenAI-compatible LLM gateway with tenant isolation, budget controls, failover, 
 
 Applications call one endpoint with a virtual key. Prism authenticates the key, enforces allowlists and rate limits, routes to the right model tier, serves cache hits when prompts match by meaning, and meters every token.
 
+> Why did the LLM gateway break up with the model provider? It needed more space to process its feelings.
+
 ```
 Client ──► Prism ──► Cerebras / OpenRouter / mock providers
               │
          Postgres + Redis
+```
+
+## Live deploy
+
+Public Railway URL:
+
+**https://gateway-production-e22b.up.railway.app**
+
+| Path | URL |
+|---|---|
+| Health | https://gateway-production-e22b.up.railway.app/health |
+| API base | https://gateway-production-e22b.up.railway.app/v1 |
+| Chat completions | `POST https://gateway-production-e22b.up.railway.app/v1/chat/completions` |
+| Ops console | https://gateway-production-e22b.up.railway.app/console/ |
+
+Demo virtual key: `prism-sk-research-4d5e6f`  
+Admin console token: value of `ADMIN_TOKEN` on the Railway service (local default `dev-admin-change-me`).
+
+```bash
+curl -sS https://gateway-production-e22b.up.railway.app/health | python3 -m json.tool
+
+curl -sS https://gateway-production-e22b.up.railway.app/v1/chat/completions \
+  -H "Authorization: Bearer prism-sk-research-4d5e6f" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast","messages":[{"role":"user","content":"Say hello"}],"max_tokens":32}' \
+  | python3 -m json.tool
 ```
 
 ## Features
@@ -197,6 +225,8 @@ Per-key quotas (seeded in Postgres): `monthly_budget_usd`, RPM, **TPM** (tokens/
 ## Deploy on Railway
 
 Prism is designed for Railway: one Go service plus managed Postgres and Redis.
+
+**This project’s live URL:** https://gateway-production-e22b.up.railway.app
 
 1. Create a Railway project; add **PostgreSQL** and **Redis**.
 2. Deploy this repo (Dockerfile at repo root).
