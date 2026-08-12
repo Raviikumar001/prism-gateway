@@ -63,7 +63,9 @@ redis.call('EXPIRE', hash_key, month_ttl)
 return {1, spend, held + estimate}
 `
 
-// Settle: release hold, add actual to spend. Safe if reservation already expired.
+// Settle: release hold and charge only while this reservation is still held.
+// After TTL reclaim another request may have reserved that capacity; charging
+// then would double-count spend.
 const settleLua = `
 local spend_key = KEYS[1]
 local held_key = KEYS[2]
@@ -73,10 +75,14 @@ local resid = ARGV[1]
 local actual = tonumber(ARGV[2])
 local month_ttl = tonumber(ARGV[3])
 
+if redis.call('HEXISTS', hash_key, resid) == 0 then
+  return {0, 0, 0}
+end
+
 local reserved = tonumber(redis.call('HGET', hash_key, resid) or '0')
+redis.call('HDEL', hash_key, resid)
+redis.call('ZREM', zset_key, resid)
 if reserved > 0 then
-  redis.call('HDEL', hash_key, resid)
-  redis.call('ZREM', zset_key, resid)
   redis.call('DECRBY', held_key, reserved)
   local held = tonumber(redis.call('GET', held_key) or '0')
   if held < 0 then
@@ -180,12 +186,20 @@ func (s *Service) Settle(ctx context.Context, rsv *Reservation, actualMicroCents
 	}
 	spend, held, zset, hash := s.keys(rsv.Key, rsv.Month)
 	now := time.Now().UTC()
-	_, err := s.rdb.Eval(ctx, settleLua,
+	raw, err := s.rdb.Eval(ctx, settleLua,
 		[]string{spend, held, zset, hash},
 		rsv.ID, actualMicroCents, monthTTLSeconds(now),
 	).Result()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrRedisDown, err)
+	}
+	arr, ok := raw.([]any)
+	if !ok || len(arr) < 1 {
+		return fmt.Errorf("%w: bad settle result", ErrRedisDown)
+	}
+	charged, _ := asInt64(arr[0])
+	if charged != 1 {
+		return ErrReservationGone
 	}
 	return nil
 }

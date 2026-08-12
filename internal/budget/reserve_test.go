@@ -59,6 +59,48 @@ func TestReservationTTLReclaim(t *testing.T) {
 	}
 }
 
+func TestSettleAfterReclaimDoesNotCharge(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	svc := budget.NewService(rdb)
+	ctx := context.Background()
+
+	const budgetCents = 1000
+	rsv1, err := svc.Reserve(ctx, "reclaim", budgetCents, 800)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	zkey := "budget:reclaim:" + rsv1.Month + ":z"
+	if err := rdb.ZAdd(ctx, zkey, redis.Z{Score: 1, Member: rsv1.ID}).Err(); err != nil {
+		t.Fatalf("force expire: %v", err)
+	}
+
+	rsv2, err := svc.Reserve(ctx, "reclaim", budgetCents, 800)
+	if err != nil {
+		t.Fatalf("reserve after expiry: %v", err)
+	}
+	if err := svc.Settle(ctx, rsv1, 800); !errors.Is(err, budget.ErrReservationGone) {
+		t.Fatalf("expected gone reservation, got %v", err)
+	}
+	spend, err := svc.Spend(ctx, "reclaim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spend != 0 {
+		t.Fatalf("late settle charged %d after reclaim", spend)
+	}
+	if err := svc.Settle(ctx, rsv2, 100); err != nil {
+		t.Fatalf("live settle: %v", err)
+	}
+	spend, err = svc.Spend(ctx, "reclaim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spend != 100 {
+		t.Fatalf("spend=%d want 100", spend)
+	}
+}
+
 func TestConcurrentReserveNoOverAdmit(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
