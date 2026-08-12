@@ -21,6 +21,30 @@ func TestLoadParsesUpstreamTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsDefaultAdminTokenInLiveMode(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("REDIS_URL", "redis://example")
+	t.Setenv("PROVIDER_MODE", "live")
+	t.Setenv("ADMIN_TOKEN", config.DefaultAdminToken)
+	if _, err := config.Load(); err == nil {
+		t.Fatal("expected live mode to reject the default admin token")
+	}
+}
+
+func TestLoadAllowsDefaultAdminTokenInMocks(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("REDIS_URL", "redis://example")
+	t.Setenv("PROVIDER_MODE", "mocks")
+	t.Setenv("ADMIN_TOKEN", config.DefaultAdminToken)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdminToken != config.DefaultAdminToken {
+		t.Fatalf("token = %q", cfg.AdminToken)
+	}
+}
+
 func TestLoadRejectsInvalidUpstreamTimeout(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("REDIS_URL", "redis://example")

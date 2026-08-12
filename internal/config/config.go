@@ -12,6 +12,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const DefaultAdminToken = "dev-admin-change-me"
+
 type Config struct {
 	Port            string
 	DatabaseURL     string
@@ -43,7 +45,7 @@ func Load() (*Config, error) {
 		Port:            getenv("PORT", "8080"),
 		DatabaseURL:     os.Getenv("DATABASE_URL"),
 		RedisURL:        os.Getenv("REDIS_URL"),
-		AdminToken:      getenv("ADMIN_TOKEN", "dev-admin-change-me"),
+		AdminToken:      getenv("ADMIN_TOKEN", DefaultAdminToken),
 		ProviderMode:    providerMode,
 		DataDir:         dataDir,
 		GatewayConfig:   getenv("GATEWAY_CONFIG", defaultGateway),
@@ -65,6 +67,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ProviderMode != "mocks" && cfg.ProviderMode != "live" {
 		return nil, fmt.Errorf("PROVIDER_MODE must be mocks or live")
+	}
+	if cfg.ProviderMode == "live" && cfg.AdminToken == DefaultAdminToken {
+		return nil, fmt.Errorf("ADMIN_TOKEN must be set to a non-default value when PROVIDER_MODE=live")
 	}
 	return cfg, nil
 }
