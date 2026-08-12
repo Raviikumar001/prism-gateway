@@ -15,16 +15,24 @@
     <form id="auth-form" class="auth" autocomplete="off">
       <label>
         Admin token
-        <input id="admin-token" type="password" placeholder="ADMIN_TOKEN" spellcheck="false" />
+        <span class="token-row">
+          <input id="admin-token" type="password" name="prism-admin-token" placeholder="Paste Railway ADMIN_TOKEN" spellcheck="false" autocomplete="off" />
+          <button type="button" id="toggle-token" class="ghost icon" aria-label="Show token">Show</button>
+        </span>
       </label>
       <label>
         Virtual key
-        <input id="virtual-key" type="text" placeholder="prism-sk-…" spellcheck="false" />
+        <input id="virtual-key" type="text" placeholder="prism-sk-…" spellcheck="false" autocomplete="off" />
       </label>
       <button type="submit">Load</button>
       <button type="button" id="refresh" class="ghost">Refresh</button>
     </form>
   </header>
+
+  <div id="auth-banner" class="banner" hidden>
+    <strong>Admin token required.</strong>
+    <span id="auth-banner-text">Paste the gateway service <code>ADMIN_TOKEN</code> from Railway Variables, then Load. The word ADMIN_TOKEN is only the variable name.</span>
+  </div>
 
   <main>
     <section class="panel" id="providers-panel">
@@ -80,7 +88,7 @@
     </section>
   </main>
 
-  <p id="status" class="status" role="status"></p>
+  <p id="status" class="status" role="status" hidden></p>
   <script src="app.js"></script>
 </body>
 </html>

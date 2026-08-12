@@ -1,30 +1,99 @@
 (() => {
   const TOKEN_KEY = "prism.ops.adminToken";
   const VK_KEY = "prism.ops.virtualKey";
+  const FAKE_TOKENS = new Set(["", "admin_token", "admin-token", "dev-admin-change-me", "changeme"]);
 
   const el = (id) => document.getElementById(id);
   const tokenInput = el("admin-token");
   const keyInput = el("virtual-key");
   const statusEl = el("status");
+  const banner = el("auth-banner");
+  const bannerText = el("auth-banner-text");
 
-  tokenInput.value = localStorage.getItem(TOKEN_KEY) || "";
+  const storedToken = localStorage.getItem(TOKEN_KEY) || "";
+  tokenInput.value = usableToken(storedToken) ? storedToken : "";
   keyInput.value = localStorage.getItem(VK_KEY) || "prism-sk-search-1a2b3c";
   let logFilter = "all";
   let openLogId = "";
+  let pollTimer = 0;
+
+  function usableToken(value) {
+    const token = String(value || "").trim();
+    if (!token) return false;
+    return !FAKE_TOKENS.has(token.toLowerCase());
+  }
+
+  function currentToken() {
+    return tokenInput.value.trim();
+  }
 
   function setStatus(msg, isErr) {
+    if (!msg) {
+      statusEl.hidden = true;
+      statusEl.textContent = "";
+      return;
+    }
+    statusEl.hidden = false;
     statusEl.textContent = msg;
     statusEl.classList.toggle("err", !!isErr);
   }
 
+  function setTokenInvalid(on) {
+    tokenInput.classList.toggle("invalid", !!on);
+    tokenInput.setAttribute("aria-invalid", on ? "true" : "false");
+  }
+
+  function showBanner(text) {
+    banner.hidden = false;
+    if (text) bannerText.innerHTML = text;
+  }
+
+  function hideBanner() {
+    banner.hidden = true;
+  }
+
+  function emptyState(title, body) {
+    return `<div class="empty-state"><div class="empty-title">${title}</div><p>${body}</p></div>`;
+  }
+
+  function lockedCopy() {
+    return emptyState("Waiting for admin token", "Paste the Railway gateway <code>ADMIN_TOKEN</code> and click Load.");
+  }
+
+  function renderLocked() {
+    el("providers").innerHTML = lockedCopy();
+    el("cache").innerHTML = lockedCopy();
+    el("usage").innerHTML = lockedCopy();
+    el("logs").innerHTML = `<tr><td class="empty" colspan="8">Waiting for a valid admin token.</td></tr>`;
+  }
+
+  function parseApiError(status, path, body) {
+    let message = "";
+    try {
+      const parsed = JSON.parse(body);
+      message = parsed?.error?.message || parsed?.message || "";
+    } catch {
+      message = body.slice(0, 120);
+    }
+    if (status === 401) {
+      return "Invalid admin token. Paste the value of ADMIN_TOKEN from Railway → gateway → Variables. Do not type the words ADMIN_TOKEN.";
+    }
+    if (status === 400 && path.includes("/admin/usage")) {
+      return message || "Usage needs a virtual key.";
+    }
+    return message || `Request failed (${status})`;
+  }
+
   async function api(path) {
-    const token = tokenInput.value.trim();
+    const token = currentToken();
     const res = await fetch(path, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`${res.status} ${path}: ${body.slice(0, 160)}`);
+      const err = new Error(parseApiError(res.status, path, body));
+      err.status = res.status;
+      throw err;
     }
     return res.json();
   }
@@ -33,7 +102,7 @@
     const root = el("providers");
     const providers = data.providers || [];
     if (!providers.length) {
-      root.innerHTML = `<p class="hint">No providers reported.</p>`;
+      root.innerHTML = emptyState("No providers", "The gateway has not reported any upstreams yet.");
       return;
     }
     root.innerHTML = providers
@@ -187,10 +256,35 @@
       .replaceAll('"', "&quot;");
   }
 
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = 0;
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(() => {
+      if (usableToken(currentToken())) loadAll();
+    }, 15000);
+  }
+
   async function loadAll() {
     const key = keyInput.value.trim();
-    localStorage.setItem(TOKEN_KEY, tokenInput.value.trim());
     localStorage.setItem(VK_KEY, key);
+
+    if (!usableToken(currentToken())) {
+      localStorage.removeItem(TOKEN_KEY);
+      setTokenInvalid(true);
+      showBanner();
+      renderLocked();
+      setStatus("Paste a real admin token to load the console.", true);
+      stopPolling();
+      tokenInput.focus();
+      return;
+    }
+
     setStatus("Loading…");
     try {
       const logsQS = new URLSearchParams({ key, limit: "80" });
@@ -201,12 +295,24 @@
         api(`/admin/usage?key=${encodeURIComponent(key)}`),
         api(`/admin/logs?${logsQS.toString()}`),
       ]);
+      localStorage.setItem(TOKEN_KEY, currentToken());
+      setTokenInvalid(false);
+      hideBanner();
       renderProviders(providers);
       renderCache(cache);
       renderUsage(usage);
       renderLogs(logs);
       setStatus(`Updated ${new Date().toLocaleTimeString()}`);
+      startPolling();
     } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        setTokenInvalid(true);
+        showBanner();
+        renderLocked();
+        stopPolling();
+        tokenInput.focus();
+      }
       setStatus(String(err.message || err), true);
     }
   }
@@ -226,7 +332,18 @@
     loadAll();
   });
   el("refresh").addEventListener("click", () => loadAll());
+  el("toggle-token").addEventListener("click", () => {
+    const hidden = tokenInput.type === "password";
+    tokenInput.type = hidden ? "text" : "password";
+    el("toggle-token").textContent = hidden ? "Hide" : "Show";
+  });
 
-  loadAll();
-  setInterval(loadAll, 15000);
+  renderLocked();
+  if (usableToken(currentToken())) {
+    loadAll();
+  } else {
+    showBanner();
+    setTokenInvalid(false);
+    setStatus("");
+  }
 })();
