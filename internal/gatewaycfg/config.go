@@ -86,8 +86,8 @@ func (c *Config) Validate() error {
 	longestChain := 0
 	for name, alias := range c.Aliases {
 		if len(alias.RouteByDifficulty) > 0 {
-			var routes map[string]string
-			if err := json.Unmarshal(alias.RouteByDifficulty, &routes); err != nil {
+			routes, err := alias.DifficultyRoutes()
+			if err != nil {
 				return fmt.Errorf("alias %q route_by_difficulty: %w", name, err)
 			}
 			for tier, target := range routes {
@@ -124,6 +124,18 @@ func (c *Config) Validate() error {
 		)
 	}
 	return nil
+}
+
+// DifficultyRoutes parses route_by_difficulty. Empty means this alias is not a router.
+func (a Alias) DifficultyRoutes() (map[string]string, error) {
+	if len(a.RouteByDifficulty) == 0 {
+		return nil, nil
+	}
+	var routes map[string]string
+	if err := json.Unmarshal(a.RouteByDifficulty, &routes); err != nil {
+		return nil, err
+	}
+	return routes, nil
 }
 
 // ApplyEnvSecrets fills empty api_key fields from api_key_env / known env vars.

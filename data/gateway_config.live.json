@@ -81,5 +81,5 @@
       "route_by_difficulty": { "simple": "fast", "complex": "smart" }
     }
   },
-  "retry": { "max_attempts": 5, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
+  "retry": { "max_attempts": 6, "initial_backoff_ms": 200, "backoff_multiplier": 2 }
 }

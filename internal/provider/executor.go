@@ -90,6 +90,15 @@ func isRetryable(err error) bool {
 	return err != nil && !errors.Is(err, context.Canceled)
 }
 
+// canRetrySameProvider allows one extra try on the current model only when
+// remaining fallback models still fit in the global attempt budget.
+func canRetrySameProvider(providerAttempts, attempts, maxAttempts, remainingModels int, err error) bool {
+	if providerAttempts >= 2 || attempts >= maxAttempts || !isRetryable(err) {
+		return false
+	}
+	return attempts+remainingModels < maxAttempts
+}
+
 func isClientAbort(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, ErrClientAbort)
 }
@@ -200,11 +209,7 @@ func (e *Executor) Chat(ctx context.Context, chain []string, request ChatRequest
 			}
 
 			remainingModels := len(chain) - modelIndex - 1
-			canRetry := providerAttempts < 2 &&
-				attempts < maxAttempts &&
-				attempts+remainingModels < maxAttempts &&
-				isRetryable(err)
-			if canRetry {
+			if canRetrySameProvider(providerAttempts, attempts, maxAttempts, remainingModels, err) {
 				sleep := fullJitter(baseBackoff, providerAttempts-1, mult)
 				timer := time.NewTimer(sleep)
 				select {
@@ -313,11 +318,7 @@ func (e *Executor) ChatStream(
 					br.Failure(probeID)
 				}
 				remainingModels := len(chain) - modelIndex - 1
-				canRetry := providerAttempts < 2 &&
-					attempts < maxAttempts &&
-					attempts+remainingModels < maxAttempts &&
-					isRetryable(err)
-				if canRetry {
+				if canRetrySameProvider(providerAttempts, attempts, maxAttempts, remainingModels, err) {
 					sleep := fullJitter(baseBackoff, providerAttempts-1, mult)
 					timer := time.NewTimer(sleep)
 					select {

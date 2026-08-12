@@ -32,22 +32,56 @@ func (r *Resolver) ResolvePrompt(requested, prompt string) (*Resolution, error) 
 	if requested == "" {
 		return nil, fmt.Errorf("model is required")
 	}
-	if requested == "auto" {
-		d := Classify(prompt, DefaultAutoThreshold)
-		aliasName := d.Tier
-		alias, ok := r.cfg.Aliases[aliasName]
-		if !ok || alias.Primary == "" {
-			return nil, fmt.Errorf("auto resolved to %q but alias missing", aliasName)
+	if alias, ok := r.cfg.Aliases[requested]; ok {
+		routes, err := alias.DifficultyRoutes()
+		if err != nil {
+			return nil, fmt.Errorf("alias %q route_by_difficulty: %w", requested, err)
 		}
-		chain := append([]string{alias.Primary}, alias.Fallbacks...)
-		return &Resolution{
-			RequestedAlias: "auto",
-			ResolvedModel:  alias.Primary,
-			Chain:          chain,
-			RouteReason:    d.Reason,
-		}, nil
+		if len(routes) > 0 {
+			return r.resolveByDifficulty(requested, routes, prompt)
+		}
+	}
+	if requested == "auto" {
+		return r.resolveByDifficulty("auto", nil, prompt)
 	}
 	return r.Resolve(requested)
+}
+
+func (r *Resolver) resolveByDifficulty(requested string, routes map[string]string, prompt string) (*Resolution, error) {
+	d := Classify(prompt, DefaultAutoThreshold)
+	aliasName := difficultyTarget(routes, d.Tier)
+	alias, ok := r.cfg.Aliases[aliasName]
+	if !ok || alias.Primary == "" {
+		return nil, fmt.Errorf("auto resolved to %q but alias missing", aliasName)
+	}
+	chain := append([]string{alias.Primary}, alias.Fallbacks...)
+	reason := d.Reason
+	if aliasName != d.Tier {
+		reason = fmt.Sprintf("%s mapped via %s.%s=%s", d.Reason, requested, d.Tier, aliasName)
+	}
+	return &Resolution{
+		RequestedAlias: requested,
+		ResolvedModel:  alias.Primary,
+		Chain:          chain,
+		RouteReason:    reason,
+	}, nil
+}
+
+func difficultyTarget(routes map[string]string, tier string) string {
+	if target := routes[tier]; target != "" {
+		return target
+	}
+	switch tier {
+	case "fast":
+		if target := routes["simple"]; target != "" {
+			return target
+		}
+	case "smart":
+		if target := routes["complex"]; target != "" {
+			return target
+		}
+	}
+	return tier
 }
 
 // Resolve maps alias or concrete model to an ordered provider model chain.

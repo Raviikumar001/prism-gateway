@@ -108,6 +108,48 @@ func TestExecutorRetriesAttemptTimeout(t *testing.T) {
 	}
 }
 
+func TestExecutorSkipsSameProviderRetryWhenNoSpareAttempts(t *testing.T) {
+	var primaryCalls atomic.Int64
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		http.Error(w, `{"error":{"message":"temporary"}}`, http.StatusInternalServerError)
+	}))
+	defer primary.Close()
+
+	var fallbackCalls atomic.Int64
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
+		http.Error(w, `{"error":{"message":"temporary"}}`, http.StatusInternalServerError)
+	}))
+	defer fallback.Close()
+
+	cfg := &gatewaycfg.Config{
+		Providers: []gatewaycfg.Provider{
+			{Name: "primary", BaseURL: primary.URL, Models: []string{"primary-model"}},
+			{Name: "fallback", BaseURL: fallback.URL, Models: []string{"fallback-model"}},
+		},
+		Retry: gatewaycfg.Retry{MaxAttempts: 2, InitialBackoffMs: 1, BackoffMultiplier: 2},
+	}
+	executor := NewExecutor(cfg, time.Second, 4)
+	request, err := ParseChatRequest([]byte(`{
+		"model":"fast",
+		"messages":[{"role":"user","content":"hello"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executor.Chat(context.Background(), []string{"primary-model", "fallback-model"}, request)
+	if err == nil {
+		t.Fatal("expected all attempts to fail")
+	}
+	if primaryCalls.Load() != 1 {
+		t.Fatalf("primary calls = %d, want 1 so the fallback still fits", primaryCalls.Load())
+	}
+	if fallbackCalls.Load() != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallbackCalls.Load())
+	}
+}
+
 func TestStreamClientWriteFailureDoesNotTripBreaker(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
