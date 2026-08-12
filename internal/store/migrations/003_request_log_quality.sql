@@ -1,0 +1,5 @@
+-- +migrate Up
+ALTER TABLE request_logs
+    ADD COLUMN IF NOT EXISTS stream BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS cost_estimated BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS detail TEXT;

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -26,13 +27,26 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 func (s *Server) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token == "Bearer "+s.cfg.AdminToken || r.Header.Get("X-Admin-Token") == s.cfg.AdminToken {
+		if adminAuthorized(s.cfg.AdminToken, r.Header.Get("Authorization"), r.Header.Get("X-Admin-Token")) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		writeAPIError(w, http.StatusUnauthorized, "authentication_error", "Invalid admin token")
 	})
+}
+
+func adminAuthorized(want, authorization, xAdmin string) bool {
+	if want == "" {
+		return false
+	}
+	got := ""
+	const prefix = "Bearer "
+	if strings.HasPrefix(authorization, prefix) {
+		got = authorization[len(prefix):]
+	}
+	bearerOK := subtle.ConstantTimeCompare([]byte(got), []byte(want))
+	headerOK := subtle.ConstantTimeCompare([]byte(xAdmin), []byte(want))
+	return (bearerOK | headerOK) == 1
 }
 
 func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
@@ -49,16 +63,32 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var requests, prompt, completion, cost, hits int64
-	err = s.db.QueryRow(r.Context(), `
-		SELECT COALESCE(SUM(requests), 0),
-		       COALESCE(SUM(prompt_tokens), 0),
-		       COALESCE(SUM(completion_tokens), 0),
-		       COALESCE(SUM(cost_micro_cents), 0),
-		       COALESCE(SUM(cache_hits), 0)
-		FROM usage_monthly
-		WHERE virtual_key = $1 AND month = ANY($2)
-	`, key, window.Months).Scan(&requests, &prompt, &completion, &cost, &hits)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	var errScan error
+	if window.Source == "request_logs" {
+		errScan = s.db.QueryRow(r.Context(), `
+			SELECT COALESCE(COUNT(*), 0),
+			       COALESCE(SUM(prompt_tokens), 0),
+			       COALESCE(SUM(completion_tokens), 0),
+			       COALESCE(SUM(cost_micro_cents), 0),
+			       COALESCE(SUM(CASE WHEN cache = 'hit' THEN 1 ELSE 0 END), 0)
+			FROM request_logs
+			WHERE virtual_key = $1
+			  AND created_at >= $2
+			  AND created_at <= $3
+			  AND status = 'ok'
+		`, key, window.From, window.To).Scan(&requests, &prompt, &completion, &cost, &hits)
+	} else {
+		errScan = s.db.QueryRow(r.Context(), `
+			SELECT COALESCE(SUM(requests), 0),
+			       COALESCE(SUM(prompt_tokens), 0),
+			       COALESCE(SUM(completion_tokens), 0),
+			       COALESCE(SUM(cost_micro_cents), 0),
+			       COALESCE(SUM(cache_hits), 0)
+			FROM usage_monthly
+			WHERE virtual_key = $1 AND month = ANY($2)
+		`, key, window.Months).Scan(&requests, &prompt, &completion, &cost, &hits)
+	}
+	if errScan != nil && !errors.Is(errScan, pgx.ErrNoRows) {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not load usage")
 		return
 	}
@@ -70,6 +100,8 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		"to":                window.To.Format("2006-01-02"),
 		"month":             window.PrimaryMonth,
 		"months":            window.Months,
+		"granularity":       window.Granularity,
+		"source":            window.Source,
 		"requests":          requests,
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
@@ -84,6 +116,8 @@ type usageWindow struct {
 	To           time.Time
 	Months       []string
 	PrimaryMonth string
+	Source       string
+	Granularity  string
 }
 
 func parseUsageWindow(q url.Values, now time.Time) (usageWindow, error) {
@@ -103,14 +137,20 @@ func parseUsageWindow(q url.Values, now time.Time) (usageWindow, error) {
 		}
 		end := start.AddDate(0, 1, 0).Add(-time.Nanosecond)
 		m := start.Format("200601")
-		return usageWindow{From: start, To: end, Months: []string{m}, PrimaryMonth: m}, nil
+		return usageWindow{
+			From: start, To: end, Months: []string{m}, PrimaryMonth: m,
+			Source: "usage_monthly", Granularity: "month",
+		}, nil
 	}
 
 	if fromRaw == "" && toRaw == "" {
 		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		end := start.AddDate(0, 1, 0).Add(-time.Nanosecond)
 		m := start.Format("200601")
-		return usageWindow{From: start, To: end, Months: []string{m}, PrimaryMonth: m}, nil
+		return usageWindow{
+			From: start, To: end, Months: []string{m}, PrimaryMonth: m,
+			Source: "usage_monthly", Granularity: "month",
+		}, nil
 	}
 
 	if fromRaw == "" || toRaw == "" {
@@ -135,6 +175,8 @@ func parseUsageWindow(q url.Values, now time.Time) (usageWindow, error) {
 		To:           to,
 		Months:       months,
 		PrimaryMonth: months[0],
+		Source:       "request_logs",
+		Granularity:  "day",
 	}, nil
 }
 
@@ -195,16 +237,37 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	q := `
 		SELECT request_id, virtual_key, requested_model, COALESCE(resolved_provider,''), COALESCE(resolved_model,''),
 		       status, prompt_tokens, completion_tokens, cost_micro_cents, cache, fallback,
-		       COALESCE(route_reason,''), retries, latency_ms, created_at
+		       COALESCE(route_reason,''), retries, latency_ms, created_at,
+		       COALESCE(stream, false), COALESCE(cost_estimated, false), COALESCE(detail,'')
 		FROM request_logs`
 	args := []any{}
+	where := []string{}
 	if key != "" {
-		q += ` WHERE virtual_key = $1 ORDER BY created_at DESC LIMIT $2`
-		args = append(args, key, limit)
-	} else {
-		q += ` ORDER BY created_at DESC LIMIT $1`
-		args = append(args, limit)
+		where = append(where, fmt.Sprintf("virtual_key = $%d", len(args)+1))
+		args = append(args, key)
 	}
+	if status := strings.TrimSpace(r.URL.Query().Get("status")); status != "" && status != "all" {
+		switch status {
+		case "ok":
+			where = append(where, "status = 'ok'")
+		case "cache":
+			where = append(where, "cache = 'hit'")
+		case "rejected":
+			where = append(where, "status LIKE 'rejected_%'")
+		case "error":
+			where = append(where, "status NOT IN ('ok') AND status NOT LIKE 'rejected_%'")
+		case "stream":
+			where = append(where, "stream = true")
+		default:
+			where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
+			args = append(args, status)
+		}
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", len(args)+1)
+	args = append(args, limit)
 
 	rows, err := s.db.Query(r.Context(), q, args...)
 	if err != nil {
@@ -220,15 +283,20 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 		ResolvedProvider string    `json:"resolved_provider"`
 		ResolvedModel    string    `json:"resolved_model"`
 		Status           string    `json:"status"`
+		StatusLabel      string    `json:"status_label"`
 		PromptTokens     int       `json:"prompt_tokens"`
 		CompletionTokens int       `json:"completion_tokens"`
 		CostMicroCents   int64     `json:"cost_micro_cents"`
+		CostUSD          string    `json:"cost_usd"`
 		Cache            string    `json:"cache"`
 		Fallback         bool      `json:"fallback"`
 		RouteReason      string    `json:"route_reason"`
 		Retries          int       `json:"retries"`
 		LatencyMs        int       `json:"latency_ms"`
 		CreatedAt        time.Time `json:"created_at"`
+		Stream           bool      `json:"stream"`
+		CostEstimated    bool      `json:"cost_estimated"`
+		Detail           string    `json:"detail"`
 	}
 	out := make([]row, 0)
 	for rows.Next() {
@@ -237,10 +305,13 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 			&item.RequestID, &item.VirtualKey, &item.RequestedModel, &item.ResolvedProvider, &item.ResolvedModel,
 			&item.Status, &item.PromptTokens, &item.CompletionTokens, &item.CostMicroCents, &item.Cache, &item.Fallback,
 			&item.RouteReason, &item.Retries, &item.LatencyMs, &item.CreatedAt,
+			&item.Stream, &item.CostEstimated, &item.Detail,
 		); err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "server_error", "Could not scan logs")
 			return
 		}
+		item.StatusLabel = statusLabel(item.Status)
+		item.CostUSD = trimCost(meter.FormatUSD(float64(item.CostMicroCents) / 100_000_000.0))
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -258,4 +329,44 @@ func (s *Server) handleAdminProvidersHealth(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleAdminCacheStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.cache.Snapshot())
+}
+
+func statusLabel(status string) string {
+	switch status {
+	case "ok":
+		return "OK"
+	case "rejected_auth":
+		return "Auth rejected"
+	case "rejected_malformed":
+		return "Bad request"
+	case "rejected_allowlist":
+		return "Model blocked"
+	case "rejected_rpm":
+		return "RPM limited"
+	case "rejected_tpm":
+		return "TPM limited"
+	case "rejected_budget":
+		return "Budget exceeded"
+	case "model_not_found":
+		return "Unknown model"
+	case "pricing_unavailable":
+		return "Pricing missing"
+	case "budget_unavailable", "rate_limiter_unavailable", "token_rate_limiter_unavailable", "auth_lookup_failed":
+		return "Internal"
+	case "client_abort":
+		return "Client abort"
+	case "gateway_overloaded":
+		return "Overloaded"
+	case "upstream_client_error":
+		return "Upstream 4xx"
+	case "upstream_error":
+		return "Upstream failed"
+	case "streaming_unsupported":
+		return "Stream unsupported"
+	default:
+		if status == "" {
+			return "Unknown"
+		}
+		return status
+	}
 }

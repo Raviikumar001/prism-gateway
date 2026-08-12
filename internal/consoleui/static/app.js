@@ -7,8 +7,10 @@
   const keyInput = el("virtual-key");
   const statusEl = el("status");
 
-  tokenInput.value = localStorage.getItem(TOKEN_KEY) || "dev-admin-change-me";
+  tokenInput.value = localStorage.getItem(TOKEN_KEY) || "";
   keyInput.value = localStorage.getItem(VK_KEY) || "prism-sk-search-1a2b3c";
+  let logFilter = "all";
+  let openLogId = "";
 
   function setStatus(msg, isErr) {
     statusEl.textContent = msg;
@@ -65,7 +67,7 @@
     const items = [
       ["From", data.from ?? "—"],
       ["To", data.to ?? "—"],
-      ["Month", data.month ?? "—"],
+      ["Granularity", data.granularity ?? "month"],
       ["Requests", data.requests ?? 0],
       ["Prompt tok", data.prompt_tokens ?? 0],
       ["Completion tok", data.completion_tokens ?? 0],
@@ -77,31 +79,99 @@
       .join("");
   }
 
+  function statusTone(row) {
+    const status = row.status || "";
+    if (row.cache === "hit") return "ok";
+    if (status === "ok") return "ok";
+    if (status.startsWith("rejected_") || status === "client_abort") return "warn";
+    if (status.includes("unavailable") || status.includes("error") || status === "gateway_overloaded") return "bad";
+    return "muted";
+  }
+
+  function formatTime(iso) {
+    if (!iso) return { rel: "—", utc: "" };
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return { rel: String(iso), utc: "" };
+    const delta = Date.now() - d.getTime();
+    const utc = d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    const sec = Math.max(0, Math.round(delta / 1000));
+    let rel = `${sec}s ago`;
+    if (sec >= 60 && sec < 3600) rel = `${Math.round(sec / 60)}m ago`;
+    else if (sec >= 3600 && sec < 86400) rel = `${Math.round(sec / 3600)}h ago`;
+    else if (sec >= 86400) rel = `${Math.round(sec / 86400)}d ago`;
+    return { rel, utc };
+  }
+
+  function formatTokens(row) {
+    const p = row.prompt_tokens || 0;
+    const c = row.completion_tokens || 0;
+    if (!p && !c) return "—";
+    return `${p} → ${c}`;
+  }
+
+  function flagPills(row) {
+    const pills = [];
+    if (row.cache === "hit") pills.push(`<span class="pill hit">${escapeHtml(row.detail || "hit")}</span>`);
+    if (row.fallback) pills.push(`<span class="pill warn">fallback</span>`);
+    if (row.stream) pills.push(`<span class="pill">stream</span>`);
+    if (row.cost_estimated) pills.push(`<span class="pill warn">est.</span>`);
+    if (row.retries) pills.push(`<span class="pill">r×${row.retries}</span>`);
+    return pills.length ? `<div class="pills">${pills.join("")}</div>` : `<span class="muted">—</span>`;
+  }
+
   function renderLogs(data) {
     const rows = data.logs || [];
     const tbody = el("logs");
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="10">No logs yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td class="empty" colspan="8">No requests in this filter yet.</td></tr>`;
       return;
     }
     tbody.innerHTML = rows
       .map((r) => {
-        const t = r.created_at ? new Date(r.created_at).toISOString().replace("T", " ").slice(0, 19) : "—";
-        const prov = [r.resolved_provider, r.resolved_model].filter(Boolean).join("/") || "—";
-        return `<tr>
-          <td>${escapeHtml(t)}</td>
-          <td>${escapeHtml(r.status || "")}</td>
-          <td>${escapeHtml(r.requested_model || "")}</td>
-          <td>${escapeHtml(prov)}</td>
-          <td>${escapeHtml(r.cache || "")}</td>
-          <td>${r.fallback ? "true" : "false"}</td>
-          <td>${escapeHtml(r.route_reason || "—")}</td>
-          <td>${r.retries ?? 0}</td>
-          <td>${r.cost_micro_cents ?? 0}</td>
+        const t = formatTime(r.created_at);
+        const tone = statusTone(r);
+        const label = r.status_label || r.status || "unknown";
+        const upstream = [r.resolved_provider, r.resolved_model].filter(Boolean).join("/") || "—";
+        const cost = r.cost_usd || "0";
+        const open = r.request_id && r.request_id === openLogId;
+        const detail = `
+          <tr class="log-detail-row"${open ? "" : " hidden"}>
+            <td colspan="8">
+              <div class="log-detail">
+                <div><div class="k">Request id</div><div class="v">${escapeHtml(r.request_id || "—")}</div></div>
+                <div><div class="k">Virtual key</div><div class="v">${escapeHtml(r.virtual_key || "—")}</div></div>
+                <div><div class="k">Route</div><div class="v">${escapeHtml(r.route_reason || "—")}</div></div>
+                <div><div class="k">Detail</div><div class="v">${escapeHtml(r.detail || "—")}</div></div>
+              </div>
+            </td>
+          </tr>`;
+        return `<tr class="log-row${open ? " open" : ""}" data-id="${escapeHtml(r.request_id || "")}">
+          <td title="${escapeHtml(t.utc)}">${escapeHtml(t.rel)}</td>
+          <td><span class="badge ${tone}">${escapeHtml(label)}</span></td>
+          <td><span class="trunc" title="${escapeHtml(r.requested_model || "")}">${escapeHtml(r.requested_model || "—")}</span></td>
+          <td><span class="trunc" title="${escapeHtml(upstream)}">${escapeHtml(upstream)}</span></td>
+          <td>${escapeHtml(formatTokens(r))}</td>
+          <td>${escapeHtml(cost)}${r.cost_estimated ? " est." : ""}</td>
+          <td>${flagPills(r)}</td>
           <td>${r.latency_ms ?? 0}</td>
-        </tr>`;
+        </tr>${detail}`;
       })
       .join("");
+
+    tbody.querySelectorAll(".log-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = row.getAttribute("data-id") || "";
+        openLogId = openLogId === id ? "" : id;
+        tbody.querySelectorAll(".log-row").forEach((elRow) => {
+          const match = elRow.getAttribute("data-id") === openLogId;
+          elRow.classList.toggle("open", match);
+          const detailRow = elRow.nextElementSibling;
+          if (detailRow && detailRow.classList.contains("log-detail-row")) {
+            detailRow.hidden = !match;
+          }
+        });
+      });
+    });
   }
 
   function pct(n) {
@@ -123,11 +193,13 @@
     localStorage.setItem(VK_KEY, key);
     setStatus("Loading…");
     try {
+      const logsQS = new URLSearchParams({ key, limit: "80" });
+      if (logFilter && logFilter !== "all") logsQS.set("status", logFilter);
       const [providers, cache, usage, logs] = await Promise.all([
         api("/admin/providers/health"),
         api("/admin/cache/stats"),
         api(`/admin/usage?key=${encodeURIComponent(key)}`),
-        api(`/admin/logs?key=${encodeURIComponent(key)}&limit=40`),
+        api(`/admin/logs?${logsQS.toString()}`),
       ]);
       renderProviders(providers);
       renderCache(cache);
@@ -138,6 +210,16 @@
       setStatus(String(err.message || err), true);
     }
   }
+
+  el("log-filters").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-filter]");
+    if (!btn) return;
+    logFilter = btn.getAttribute("data-filter") || "all";
+    el("log-filters").querySelectorAll(".chip").forEach((chip) => {
+      chip.classList.toggle("active", chip === btn);
+    });
+    loadAll();
+  });
 
   el("auth-form").addEventListener("submit", (e) => {
     e.preventDefault();

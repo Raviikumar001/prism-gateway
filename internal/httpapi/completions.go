@@ -101,12 +101,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if !tenant.AllowsModel(body.Model) {
 		writeAPIError(w, http.StatusForbidden, "model_not_allowed", "Model is not on this key's allowlist")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			Status:         "rejected_allowlist",
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         "Model is not on this key's allowlist",
 		})
 		return
 	}
@@ -114,49 +114,23 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err := s.rpm.Allow(ctx, tenant.VirtualKey, tenant.RPM); err != nil {
 		if errors.Is(err, limit.ErrRateLimited) {
 			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Requests per minute exceeded")
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
+			s.recordLog(start, logEntry{
 				VirtualKey:     tenant.VirtualKey,
 				RequestedModel: body.Model,
 				Status:         "rejected_rpm",
-				LatencyMs:      int(time.Since(start).Milliseconds()),
+				Stream:         body.Stream,
+				Detail:         "Requests per minute exceeded",
 			})
 			return
 		}
 		slog.Error("rpm check failed", "err", err)
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Rate limiter unavailable")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			Status:         "rate_limiter_unavailable",
-			LatencyMs:      int(time.Since(start).Milliseconds()),
-		})
-		return
-	}
-	tokenEstimate := body.PromptTokenUpperBound() + body.CompletionTokenLimit()
-	if err := s.rpm.AllowTokens(ctx, tenant.VirtualKey, tokenEstimate, tenant.TPM); err != nil {
-		if errors.Is(err, limit.ErrRateLimited) {
-			writeAPIError(w, http.StatusTooManyRequests, "token_rate_limit_exceeded", "Tokens per minute exceeded")
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
-				VirtualKey:     tenant.VirtualKey,
-				RequestedModel: body.Model,
-				Status:         "rejected_tpm",
-				PromptTokens:   tokenEstimate,
-				LatencyMs:      int(time.Since(start).Milliseconds()),
-			})
-			return
-		}
-		slog.Error("tpm check failed", "err", err)
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Token rate limiter unavailable")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
-			VirtualKey:     tenant.VirtualKey,
-			RequestedModel: body.Model,
-			Status:         "token_rate_limiter_unavailable",
-			PromptTokens:   tokenEstimate,
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         "Rate limiter unavailable",
 		})
 		return
 	}
@@ -171,12 +145,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusNotFound
 		typ := "not_found_error"
 		writeAPIError(w, status, typ, err.Error())
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			Status:         "model_not_found",
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         err.Error(),
 		})
 		return
 	}
@@ -186,14 +160,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("price lookup failed", "err", err, "models", res.Chain)
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Pricing unavailable for model")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			ResolvedModel:  primary,
 			Status:         "pricing_unavailable",
 			RouteReason:    res.RouteReason,
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         "Pricing unavailable for model",
 		})
 		return
 	}
@@ -213,15 +187,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("x-prism-cost-usd", "0")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(hit.Body)
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
-				VirtualKey:     tenant.VirtualKey,
-				RequestedModel: body.Model,
-				ResolvedModel:  responseModel(hit.Body, primary),
-				Status:         "ok",
-				Cache:          "hit",
-				RouteReason:    res.RouteReason,
-				LatencyMs:      int(time.Since(start).Milliseconds()),
+			s.recordLog(start, logEntry{
+				VirtualKey:       tenant.VirtualKey,
+				RequestedModel:   body.Model,
+				ResolvedProvider: "cache",
+				ResolvedModel:    responseModel(hit.Body, primary),
+				Status:           "ok",
+				Cache:            "hit",
+				RouteReason:      res.RouteReason,
+				Detail:           hit.Kind,
 			})
 			return
 		}
@@ -237,28 +211,28 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	rsv, err := s.budget.Reserve(ctx, tenant.VirtualKey, budgetLimit, estimate)
 	if errors.Is(err, budget.ErrBudgetExceeded) {
 		writeAPIError(w, http.StatusTooManyRequests, "budget_exceeded", "Monthly budget exceeded")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			ResolvedModel:  primary,
 			Status:         "rejected_budget",
 			RouteReason:    res.RouteReason,
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         "Monthly budget exceeded",
 		})
 		return
 	}
 	if err != nil {
 		slog.Error("budget reserve failed", "err", err)
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Budget service unavailable")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
 			ResolvedModel:  primary,
 			Status:         "budget_unavailable",
 			RouteReason:    res.RouteReason,
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			Stream:         body.Stream,
+			Detail:         "Budget service unavailable",
 		})
 		return
 	}
@@ -268,9 +242,45 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := s.budget.Settle(settleCtx, rsv, actualCost); err != nil {
-			slog.Error("budget settle failed", "err", err, "reservation", rsv.ID)
+			if errors.Is(err, budget.ErrReservationGone) {
+				slog.Warn("budget settle skipped; reservation reclaimed", "reservation", rsv.ID)
+			} else {
+				slog.Error("budget settle failed", "err", err, "reservation", rsv.ID)
+			}
 		}
 	}()
+
+	tokenEstimate := body.PromptTokenUpperBound() + body.CompletionTokenLimit()
+	if err := s.rpm.AllowTokens(ctx, tenant.VirtualKey, tokenEstimate, tenant.TPM); err != nil {
+		if errors.Is(err, limit.ErrRateLimited) {
+			writeAPIError(w, http.StatusTooManyRequests, "token_rate_limit_exceeded", "Tokens per minute exceeded")
+			s.recordLog(start, logEntry{
+				VirtualKey:     tenant.VirtualKey,
+				RequestedModel: body.Model,
+				ResolvedModel:  primary,
+				Status:         "rejected_tpm",
+				PromptTokens:   tokenEstimate,
+				RouteReason:    res.RouteReason,
+				Stream:         body.Stream,
+				Detail:         "Tokens per minute exceeded",
+			})
+			return
+		}
+		slog.Error("tpm check failed", "err", err)
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Token rate limiter unavailable")
+		s.recordLog(start, logEntry{
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			ResolvedModel:  primary,
+			Status:         "token_rate_limiter_unavailable",
+			PromptTokens:   tokenEstimate,
+			RouteReason:    res.RouteReason,
+			Stream:         body.Stream,
+			Detail:         "Token rate limiter unavailable",
+		})
+		return
+	}
+
 	stopRefresh := s.keepBudgetReservationAlive(rsv)
 	defer stopRefresh()
 
@@ -282,23 +292,25 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	result, err := s.exec.Chat(ctx, res.Chain, body)
 	if err != nil {
 		if errors.Is(err, provider.ErrClientAbort) {
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
+			s.recordLog(start, logEntry{
 				VirtualKey:     tenant.VirtualKey,
 				RequestedModel: body.Model,
+				ResolvedModel:  primary,
 				Status:         "client_abort",
-				LatencyMs:      int(time.Since(start).Milliseconds()),
+				RouteReason:    res.RouteReason,
+				Detail:         "Client aborted",
 			})
 			return
 		}
 		if errors.Is(err, provider.ErrOverloaded) {
 			writeAPIError(w, http.StatusServiceUnavailable, "server_error", "Gateway overloaded")
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
+			s.recordLog(start, logEntry{
 				VirtualKey:     tenant.VirtualKey,
 				RequestedModel: body.Model,
+				ResolvedModel:  primary,
 				Status:         "gateway_overloaded",
-				LatencyMs:      int(time.Since(start).Milliseconds()),
+				RouteReason:    res.RouteReason,
+				Detail:         "Too many in-flight upstream requests",
 			})
 			return
 		}
@@ -308,22 +320,24 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			upstreamErr.StatusCode < 500 &&
 			upstreamErr.StatusCode != http.StatusTooManyRequests {
 			writeUpstreamClientError(w, upstreamErr)
-			s.logger.Enqueue(logEntry{
-				RequestID:      uuid.NewString(),
+			s.recordLog(start, logEntry{
 				VirtualKey:     tenant.VirtualKey,
 				RequestedModel: body.Model,
+				ResolvedModel:  primary,
 				Status:         "upstream_client_error",
-				LatencyMs:      int(time.Since(start).Milliseconds()),
+				RouteReason:    res.RouteReason,
+				Detail:         upstreamLogDetail(upstreamErr),
 			})
 			return
 		}
 		writeAPIError(w, http.StatusBadGateway, "upstream_error", "All upstream providers failed")
-		s.logger.Enqueue(logEntry{
-			RequestID:      uuid.NewString(),
+		s.recordLog(start, logEntry{
 			VirtualKey:     tenant.VirtualKey,
 			RequestedModel: body.Model,
+			ResolvedModel:  primary,
 			Status:         "upstream_error",
-			LatencyMs:      int(time.Since(start).Milliseconds()),
+			RouteReason:    res.RouteReason,
+			Detail:         err.Error(),
 		})
 		return
 	}
@@ -356,7 +370,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Response.Raw)
 
-	s.logger.Enqueue(logEntry{
+	s.recordLog(start, logEntry{
 		RequestID:        reqID,
 		VirtualKey:       tenant.VirtualKey,
 		RequestedModel:   body.Model,
@@ -370,7 +384,6 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Fallback:         result.Fallback,
 		RouteReason:      res.RouteReason,
 		Retries:          result.Retries,
-		LatencyMs:        int(time.Since(start).Milliseconds()),
 	})
 }
 
@@ -390,6 +403,15 @@ func (s *Server) handleStream(
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "Streaming unsupported")
+		s.recordLog(start, logEntry{
+			VirtualKey:     tenant.VirtualKey,
+			RequestedModel: body.Model,
+			ResolvedModel:  res.ResolvedModel,
+			Status:         "streaming_unsupported",
+			RouteReason:    res.RouteReason,
+			Stream:         true,
+			Detail:         "Response writer does not support flushing",
+		})
 		return
 	}
 
@@ -475,6 +497,7 @@ func (s *Server) handleStream(
 		}
 	}
 
+	costEstimated := false
 	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 		billPrice, perr := s.meter.Price(context.WithoutCancel(ctx), model)
 		if perr != nil {
@@ -484,9 +507,22 @@ func (s *Server) handleStream(
 		cost := meter.CostUSD(usage.PromptTokens, usage.CompletionTokens, billPrice)
 		*actualCost = meter.ToMicroCents(cost)
 		s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, usage.PromptTokens, usage.CompletionTokens, *actualCost)
+	} else if shouldBillStreamEstimate(status, headersWritten) {
+		*actualCost = estimatedCost
+		usage.PromptTokens = body.PromptTokenUpperBound()
+		usage.CompletionTokens = body.CompletionTokenLimit()
+		costEstimated = true
+		s.bumpUsage(context.WithoutCancel(ctx), tenant.VirtualKey, usage.PromptTokens, usage.CompletionTokens, *actualCost)
 	}
 
-	s.logger.Enqueue(logEntry{
+	detail := ""
+	if err != nil {
+		detail = err.Error()
+	} else if costEstimated {
+		detail = "usage missing; billed reserved estimate"
+	}
+
+	s.recordLog(start, logEntry{
 		RequestID:        uuid.NewString(),
 		VirtualKey:       tenant.VirtualKey,
 		RequestedModel:   body.Model,
@@ -500,8 +536,17 @@ func (s *Server) handleStream(
 		Fallback:         fallback,
 		RouteReason:      res.RouteReason,
 		Retries:          retries,
-		LatencyMs:        int(time.Since(start).Milliseconds()),
+		Stream:           true,
+		CostEstimated:    costEstimated,
+		Detail:           detail,
 	})
+}
+
+func shouldBillStreamEstimate(status string, headersWritten bool) bool {
+	if !headersWritten {
+		return false
+	}
+	return status == "ok" || status == "client_abort" || status == "upstream_error"
 }
 
 func (s *Server) keepBudgetReservationAlive(rsv *budget.Reservation) func() {
@@ -581,30 +626,6 @@ func (s *Server) bumpCacheHit(ctx context.Context, virtualKey string) {
 	}
 }
 
-type logEntry struct {
-	RequestID        string
-	VirtualKey       string
-	RequestedModel   string
-	ResolvedProvider string
-	ResolvedModel    string
-	Status           string
-	PromptTokens     int
-	CompletionTokens int
-	CostMicroCents   int64
-	Cache            string
-	Fallback         bool
-	RouteReason      string
-	Retries          int
-	LatencyMs        int
-}
-
-func nullStr(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
 func trimCost(s string) string {
 	for len(s) > 1 && s[len(s)-1] == '0' {
 		s = s[:len(s)-1]
@@ -617,17 +638,10 @@ func trimCost(s string) string {
 
 func (s *Server) rejectAndLog(w http.ResponseWriter, start time.Time, statusCode int, typ, message string, e logEntry) {
 	writeAPIError(w, statusCode, typ, message)
-	if e.RequestID == "" {
-		e.RequestID = uuid.NewString()
+	if e.Detail == "" {
+		e.Detail = message
 	}
-	if e.VirtualKey == "" {
-		e.VirtualKey = unauthenticatedKey
-	}
-	if e.Cache == "" {
-		e.Cache = "miss"
-	}
-	e.LatencyMs = int(time.Since(start).Milliseconds())
-	s.logger.Enqueue(e)
+	s.recordLog(start, e)
 }
 
 func responseModel(body json.RawMessage, fallback string) string {
@@ -663,4 +677,14 @@ func writeUpstreamClientError(w http.ResponseWriter, upstreamErr *provider.Upstr
 		message = "Upstream rejected the request"
 	}
 	writeAPIError(w, upstreamErr.StatusCode, "invalid_request_error", message)
+}
+
+func upstreamLogDetail(err *provider.UpstreamError) string {
+	if err == nil {
+		return ""
+	}
+	if err.Message != "" {
+		return fmt.Sprintf("HTTP %d: %s", err.StatusCode, err.Message)
+	}
+	return fmt.Sprintf("HTTP %d", err.StatusCode)
 }

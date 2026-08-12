@@ -41,26 +41,36 @@
 
     <section class="panel" id="usage-panel">
       <h2>Usage</h2>
-      <p class="hint">Usage rollup for the selected virtual key over <code>from</code>/<code>to</code> (defaults to the current UTC month).</p>
+      <p class="hint">Rollup for the selected virtual key. Day windows use request logs; month defaults use the monthly table.</p>
       <div id="usage" class="stats"></div>
     </section>
 
     <section class="panel wide" id="logs-panel">
-      <h2>Recent requests</h2>
-      <p class="hint">Latest request logs (failover shows as <code>fallback=true</code>).</p>
+      <div class="panel-head">
+        <div>
+          <h2>Recent requests</h2>
+          <p class="hint">Click a row for request id, route reason, and error detail.</p>
+        </div>
+        <div class="filters" id="log-filters" role="tablist" aria-label="Log filters">
+          <button type="button" class="chip active" data-filter="all">All</button>
+          <button type="button" class="chip" data-filter="ok">OK</button>
+          <button type="button" class="chip" data-filter="cache">Cache</button>
+          <button type="button" class="chip" data-filter="rejected">Rejected</button>
+          <button type="button" class="chip" data-filter="error">Errors</button>
+          <button type="button" class="chip" data-filter="stream">Stream</button>
+        </div>
+      </div>
       <div class="table-wrap">
-        <table>
+        <table class="logs">
           <thead>
             <tr>
               <th>Time</th>
               <th>Status</th>
               <th>Model</th>
-              <th>Provider</th>
-              <th>Cache</th>
-              <th>Fallback</th>
-              <th>Route</th>
-              <th>Retries</th>
-              <th>Cost µ¢</th>
+              <th>Upstream</th>
+              <th>Tokens</th>
+              <th>Cost</th>
+              <th>Flags</th>
               <th>ms</th>
             </tr>
           </thead>

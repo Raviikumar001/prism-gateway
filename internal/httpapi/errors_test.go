@@ -25,6 +25,13 @@ func TestWriteUpstreamClientErrorPreservesOpenAIError(t *testing.T) {
 	}
 }
 
+func TestUpstreamLogDetail(t *testing.T) {
+	got := upstreamLogDetail(&provider.UpstreamError{StatusCode: 400, Message: "bad tool schema"})
+	if got != "HTTP 400: bad tool schema" {
+		t.Fatalf("detail = %q", got)
+	}
+}
+
 func TestResponseModelUsesCachedFallbackModel(t *testing.T) {
 	if got := responseModel([]byte(`{"model":"fallback-model"}`), "primary-model"); got != "fallback-model" {
 		t.Fatalf("model = %q", got)

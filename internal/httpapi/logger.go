@@ -5,11 +5,34 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const logQueueSize = 1024
+const maxLogDetailRunes = 240
+
+type logEntry struct {
+	RequestID        string
+	VirtualKey       string
+	RequestedModel   string
+	ResolvedProvider string
+	ResolvedModel    string
+	Status           string
+	PromptTokens     int
+	CompletionTokens int
+	CostMicroCents   int64
+	Cache            string
+	Fallback         bool
+	RouteReason      string
+	Retries          int
+	LatencyMs        int
+	Stream           bool
+	CostEstimated    bool
+	Detail           string
+}
 
 type RequestLogger struct {
 	db   *pgxpool.Pool
@@ -59,6 +82,45 @@ func (l *RequestLogger) Close() {
 	})
 }
 
+func completeLog(start time.Time, e logEntry) logEntry {
+	if e.RequestID == "" {
+		e.RequestID = uuid.NewString()
+	}
+	if e.VirtualKey == "" {
+		e.VirtualKey = unauthenticatedKey
+	}
+	if e.Cache == "" {
+		e.Cache = "miss"
+	}
+	if e.LatencyMs <= 0 {
+		e.LatencyMs = int(time.Since(start).Milliseconds())
+	}
+	e.Detail = truncateDetail(e.Detail)
+	return e
+}
+
+func truncateDetail(s string) string {
+	if s == "" {
+		return s
+	}
+	if utf8.RuneCountInString(s) <= maxLogDetailRunes {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:maxLogDetailRunes-1]) + "…"
+}
+
+func (s *Server) recordLog(start time.Time, e logEntry) {
+	s.logger.Enqueue(completeLog(start, e))
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func insertRequestLog(ctx context.Context, db *pgxpool.Pool, e logEntry) {
 	if e.Cache == "" {
 		e.Cache = "miss"
@@ -67,12 +129,12 @@ func insertRequestLog(ctx context.Context, db *pgxpool.Pool, e logEntry) {
 		INSERT INTO request_logs (
 			request_id, virtual_key, requested_model, resolved_provider, resolved_model,
 			status, prompt_tokens, completion_tokens, cost_micro_cents, cache, fallback,
-			route_reason, retries, latency_ms
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			route_reason, retries, latency_ms, stream, cost_estimated, detail
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		ON CONFLICT (request_id) DO NOTHING
 	`, e.RequestID, e.VirtualKey, e.RequestedModel, nullStr(e.ResolvedProvider), nullStr(e.ResolvedModel),
 		e.Status, e.PromptTokens, e.CompletionTokens, e.CostMicroCents, e.Cache, e.Fallback,
-		nullStr(e.RouteReason), e.Retries, e.LatencyMs)
+		nullStr(e.RouteReason), e.Retries, e.LatencyMs, e.Stream, e.CostEstimated, nullStr(e.Detail))
 	if err != nil {
 		slog.Error("request log insert failed", "err", err, "request_id", e.RequestID)
 	}
