@@ -100,7 +100,7 @@ func (s *Service) Lookup(ctx context.Context, virtualKey, normalized string, thr
 		s.stats.Misses.Add(1)
 		return nil, nil
 	}
-	scope, prompt := cacheScopeAndPrompt(normalized)
+	scope, variant, prompt := splitCacheKey(normalized)
 	hash := PromptHash(virtualKey, normalized)
 
 	var body []byte
@@ -127,11 +127,12 @@ func (s *Service) Lookup(ctx context.Context, virtualKey, normalized string, thr
 		FROM cache_entries
 		WHERE virtual_key = $2
 		  AND ($4 = '' OR split_part(prompt_text, ' :: ', 1) = $4)
+		  AND split_part(prompt_text, ' :: ', 2) = $5
 		  AND embedding IS NOT NULL
 		  AND 1 - (embedding <=> $1) >= $3
 		ORDER BY embedding <=> $1
 		LIMIT 8
-	`, pgvector.NewVector(vec), virtualKey, threshold, scope)
+	`, pgvector.NewVector(vec), virtualKey, threshold, scope, variant)
 	if err != nil {
 		return nil, fmt.Errorf("cache semantic lookup: %w", err)
 	}
@@ -143,7 +144,10 @@ func (s *Service) Lookup(ctx context.Context, virtualKey, normalized string, thr
 		if err := rows.Scan(&id, &body, &candidateText, &sim); err != nil {
 			return nil, fmt.Errorf("cache semantic scan: %w", err)
 		}
-		_, _, candidatePrompt := splitCacheKey(candidateText)
+		_, candidateVariant, candidatePrompt := splitCacheKey(candidateText)
+		if candidateVariant != variant {
+			continue
+		}
 		if !semanticRelated(prompt, candidatePrompt) {
 			continue
 		}

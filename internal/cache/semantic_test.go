@@ -31,3 +31,20 @@ func TestCacheScopeSeparatesModels(t *testing.T) {
 		t.Fatalf("scope=%q prompt=%q", scope, prompt)
 	}
 }
+
+func TestCacheKeySeparatesGenerationVariants(t *testing.T) {
+	prompt := "What are the steps to reset my dashboard password?"
+	low := Key("fast", `{"temperature":0}`, prompt)
+	high := Key("fast", `{"temperature":1.2}`, prompt)
+	scopeA, variantA, promptA := splitCacheKey(low)
+	scopeB, variantB, promptB := splitCacheKey(high)
+	if scopeA != scopeB || promptA != promptB {
+		t.Fatalf("scope/prompt should match: %q %q vs %q %q", scopeA, promptA, scopeB, promptB)
+	}
+	if variantA == variantB {
+		t.Fatal("generation variants must not collapse")
+	}
+	if !semanticRelated(promptA, promptB) {
+		t.Fatal("same prompt should still be semantically related; variant matching is a separate constraint")
+	}
+}
