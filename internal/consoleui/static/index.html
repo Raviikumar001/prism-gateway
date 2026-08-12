@@ -3,63 +3,124 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Prism Ops</title>
+  <title>Gateway overview — Prism</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="top">
-    <div class="brand">
-      <span class="mark">Prism</span>
-      <span class="sub">ops console</span>
+    <div class="top-main">
+      <div class="brand">
+        <h1>Gateway overview — Prism</h1>
+        <div class="pills" id="header-pills"></div>
+      </div>
+      <div class="top-actions">
+        <label class="search">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path fill="currentColor" d="M8.5 3a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65-1.06 1.06-3.65-3.65A5.5 5.5 0 1 1 8.5 3Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
+          <input id="search" type="search" placeholder="Ask: which tenants exceeded budget?" spellcheck="false" />
+          <kbd>⌘K</kbd>
+        </label>
+        <button type="button" id="refresh" class="ghost">Refresh</button>
+      </div>
     </div>
-    <form id="auth-form" class="auth" autocomplete="off">
-      <label>
-        Admin token
-        <span class="token-row">
-          <input id="admin-token" type="password" name="prism-admin-token" placeholder="Paste Railway ADMIN_TOKEN" spellcheck="false" autocomplete="off" />
-          <button type="button" id="toggle-token" class="ghost icon" aria-label="Show token">Show</button>
-        </span>
-      </label>
-      <label>
-        Virtual key
-        <input id="virtual-key" type="text" placeholder="prism-sk-…" spellcheck="false" autocomplete="off" />
-      </label>
-      <button type="submit">Load</button>
-      <button type="button" id="refresh" class="ghost">Refresh</button>
-    </form>
+    <div class="filters">
+      <span class="select" id="env-chip">Live</span>
+      <span class="select">All tenants</span>
+      <span class="select">Last 24h</span>
+    </div>
   </header>
 
-  <div id="auth-banner" class="banner" hidden>
-    <strong>Admin token required.</strong>
-    <span id="auth-banner-text">Paste the gateway service <code>ADMIN_TOKEN</code> from Railway Variables, then Load. The word ADMIN_TOKEN is only the variable name.</span>
-  </div>
-
   <main>
-    <section class="panel" id="providers-panel">
-      <h2>Providers / breakers</h2>
-      <p class="hint">Circuit state for each upstream. Open = skipped until cooldown.</p>
-      <div id="providers" class="cards"></div>
-    </section>
-
-    <section class="panel" id="cache-panel">
-      <h2>Cache</h2>
-      <p class="hint">Process-local hit counters since last restart.</p>
-      <div id="cache" class="stats"></div>
-    </section>
-
-    <section class="panel" id="usage-panel">
-      <h2>Usage</h2>
-      <p class="hint">Rollup for the selected virtual key. Day windows use request logs; month defaults use the monthly table.</p>
-      <div id="usage" class="stats"></div>
-    </section>
-
-    <section class="panel wide" id="logs-panel">
-      <div class="panel-head">
-        <div>
-          <h2>Recent requests</h2>
-          <p class="hint">Click a row for request id, route reason, and error detail.</p>
+    <section class="metrics">
+      <article class="card metric">
+        <div class="metric-k">Providers healthy</div>
+        <div class="metric-row">
+          <div class="metric-v" id="m-healthy">—</div>
+          <span class="delta ok" id="m-healthy-delta">stable</span>
         </div>
-        <div class="filters" id="log-filters" role="tablist" aria-label="Log filters">
+        <div class="metric-sub" id="m-healthy-sub"></div>
+      </article>
+      <article class="card metric">
+        <div class="metric-k">24h spend</div>
+        <div class="metric-row">
+          <div class="metric-v" id="m-spend">—</div>
+          <span class="delta" id="m-spend-delta"></span>
+        </div>
+        <div class="metric-sub" id="m-spend-sub">vs prior 24h</div>
+      </article>
+      <article class="card metric">
+        <div class="metric-k">Open incidents</div>
+        <div class="metric-row">
+          <div class="metric-v" id="m-incidents">—</div>
+          <span class="delta" id="m-incidents-delta"></span>
+        </div>
+        <div class="metric-sub" id="m-incidents-sub">breakers, deps, errors</div>
+      </article>
+    </section>
+
+    <section class="grid-3">
+      <article class="card">
+        <div class="card-k">Run success rate</div>
+        <div class="metric-row">
+          <div class="metric-v" id="success-v">—</div>
+          <span class="delta" id="success-delta"></span>
+        </div>
+        <p class="hint" id="success-hint">Completed runs / total runs</p>
+        <div class="bar" aria-hidden="true">
+          <span class="bar-ok" id="bar-ok"></span>
+          <span class="bar-bad" id="bar-bad"></span>
+          <span class="bar-warn" id="bar-warn"></span>
+        </div>
+        <div class="bar-legend" id="bar-legend"></div>
+        <div class="callout" id="success-note"></div>
+      </article>
+
+      <article class="card" id="providers">
+        <div class="card-k">Provider status</div>
+        <table class="dense">
+          <thead>
+            <tr>
+              <th>State</th>
+              <th>N</th>
+              <th>Runs</th>
+              <th>Latency</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody id="run-mix"></tbody>
+        </table>
+        <a class="cta" href="#logs">Open request log →</a>
+      </article>
+
+      <article class="card" id="attention">
+        <div class="card-k">What needs your attention</div>
+        <ol class="feed" id="attention-list"></ol>
+      </article>
+    </section>
+
+    <section class="grid-2">
+      <article class="card">
+        <div class="card-k">Token spend</div>
+        <p class="hint">USD billed in the last 24 hours</p>
+        <div class="chart-wrap" id="chart"></div>
+      </article>
+      <article class="card" id="tenants">
+        <div class="card-head">
+          <div class="card-k">Tenants needing eyes</div>
+        </div>
+        <ul class="people" id="tenant-list"></ul>
+      </article>
+    </section>
+
+    <section class="card wide" id="logs">
+      <div class="card-head">
+        <div>
+          <div class="card-k">Recent requests</div>
+          <p class="hint">Team names only — virtual keys stay off this page.</p>
+        </div>
+        <div class="chips" id="log-filters" role="tablist" aria-label="Log filters">
           <button type="button" class="chip active" data-filter="all">All</button>
           <button type="button" class="chip" data-filter="ok">OK</button>
           <button type="button" class="chip" data-filter="cache">Cache</button>
@@ -73,16 +134,16 @@
           <thead>
             <tr>
               <th>Time</th>
+              <th>Team</th>
               <th>Status</th>
               <th>Model</th>
               <th>Upstream</th>
               <th>Tokens</th>
               <th>Cost</th>
-              <th>Flags</th>
               <th>ms</th>
             </tr>
           </thead>
-          <tbody id="logs"></tbody>
+          <tbody id="logs-body"></tbody>
         </table>
       </div>
     </section>

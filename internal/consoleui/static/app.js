@@ -1,31 +1,12 @@
 (() => {
-  const TOKEN_KEY = "prism.ops.adminToken";
-  const VK_KEY = "prism.ops.virtualKey";
-  const FAKE_TOKENS = new Set(["", "admin_token", "admin-token", "dev-admin-change-me", "changeme"]);
-
   const el = (id) => document.getElementById(id);
-  const tokenInput = el("admin-token");
-  const keyInput = el("virtual-key");
   const statusEl = el("status");
-  const banner = el("auth-banner");
-  const bannerText = el("auth-banner-text");
+  const searchInput = el("search");
 
-  const storedToken = localStorage.getItem(TOKEN_KEY) || "";
-  tokenInput.value = usableToken(storedToken) ? storedToken : "";
-  keyInput.value = localStorage.getItem(VK_KEY) || "prism-sk-search-1a2b3c";
   let logFilter = "all";
   let openLogId = "";
   let pollTimer = 0;
-
-  function usableToken(value) {
-    const token = String(value || "").trim();
-    if (!token) return false;
-    return !FAKE_TOKENS.has(token.toLowerCase());
-  }
-
-  function currentToken() {
-    return tokenInput.value.trim();
-  }
+  let latest = null;
 
   function setStatus(msg, isErr) {
     if (!msg) {
@@ -38,114 +19,55 @@
     statusEl.classList.toggle("err", !!isErr);
   }
 
-  function setTokenInvalid(on) {
-    tokenInput.classList.toggle("invalid", !!on);
-    tokenInput.setAttribute("aria-invalid", on ? "true" : "false");
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 
-  function showBanner(text) {
-    banner.hidden = false;
-    if (text) bannerText.innerHTML = text;
+  function pct(n, digits = 1) {
+    if (typeof n !== "number" || Number.isNaN(n)) return "—";
+    return (n * 100).toFixed(digits) + "%";
   }
 
-  function hideBanner() {
-    banner.hidden = true;
+  function money(v) {
+    if (v == null || v === "") return "$0";
+    const s = String(v);
+    return s.startsWith("$") ? s : "$" + s;
   }
 
-  function emptyState(title, body) {
-    return `<div class="empty-state"><div class="empty-title">${title}</div><p>${body}</p></div>`;
+  function fmtInt(n) {
+    return Number(n || 0).toLocaleString();
   }
 
-  function lockedCopy() {
-    return emptyState("Waiting for admin token", "Paste the Railway gateway <code>ADMIN_TOKEN</code> and click Load.");
+  function fmtMs(n) {
+    if (!n) return "—";
+    return Math.round(n) + "ms";
   }
 
-  function renderLocked() {
-    el("providers").innerHTML = lockedCopy();
-    el("cache").innerHTML = lockedCopy();
-    el("usage").innerHTML = lockedCopy();
-    el("logs").innerHTML = `<tr><td class="empty" colspan="8">Waiting for a valid admin token.</td></tr>`;
+  function queryText() {
+    return (searchInput.value || "").trim().toLowerCase();
   }
 
-  function parseApiError(status, path, body) {
-    let message = "";
-    try {
-      const parsed = JSON.parse(body);
-      message = parsed?.error?.message || parsed?.message || "";
-    } catch {
-      message = body.slice(0, 120);
-    }
-    if (status === 401) {
-      return "Invalid admin token. Paste the value of ADMIN_TOKEN from Railway → gateway → Variables. Do not type the words ADMIN_TOKEN.";
-    }
-    if (status === 400 && path.includes("/admin/usage")) {
-      return message || "Usage needs a virtual key.";
-    }
-    return message || `Request failed (${status})`;
+  function matchesQuery(parts) {
+    const q = queryText();
+    if (!q) return true;
+    return parts.join(" ").toLowerCase().includes(q);
   }
 
-  async function api(path) {
-    const token = currentToken();
-    const res = await fetch(path, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      const err = new Error(parseApiError(res.status, path, body));
-      err.status = res.status;
-      throw err;
-    }
-    return res.json();
-  }
-
-  function renderProviders(data) {
-    const root = el("providers");
-    const providers = data.providers || [];
-    if (!providers.length) {
-      root.innerHTML = emptyState("No providers", "The gateway has not reported any upstreams yet.");
-      return;
-    }
-    root.innerHTML = providers
-      .map((p) => {
-        const state = (p.state || "unknown").toLowerCase();
-        const rate = typeof p.failure_rate === "number" ? (p.failure_rate * 100).toFixed(0) + "%" : "—";
-        return `<article class="card">
-          <div class="name">${escapeHtml(p.name)}</div>
-          <span class="badge ${escapeHtml(state)}">${escapeHtml(state)}</span>
-          <div class="hint" style="margin:0">samples ${p.samples ?? 0} · failures ${p.failures ?? 0} · rate ${rate} · cooldown ${p.cooldown_ms ?? "—"}ms</div>
-          <div class="hint" style="margin:0;font-family:var(--mono);font-size:0.72rem">${escapeHtml(p.base_url || "")}</div>
-        </article>`;
-      })
-      .join("");
-  }
-
-  function renderCache(data) {
-    const items = [
-      ["Hit rate", pct(data.hit_rate)],
-      ["Exact hits", data.hits_exact ?? 0],
-      ["Semantic hits", data.hits_semantic ?? 0],
-      ["Misses", data.misses ?? 0],
-      ["Stores", data.stores ?? 0],
-    ];
-    el("cache").innerHTML = items
-      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
-      .join("");
-  }
-
-  function renderUsage(data) {
-    const items = [
-      ["From", data.from ?? "—"],
-      ["To", data.to ?? "—"],
-      ["Granularity", data.granularity ?? "month"],
-      ["Requests", data.requests ?? 0],
-      ["Prompt tok", data.prompt_tokens ?? 0],
-      ["Completion tok", data.completion_tokens ?? 0],
-      ["Cost USD", data.cost_usd ?? "0"],
-      ["Cache hits", data.cache_hits ?? 0],
-    ];
-    el("usage").innerHTML = items
-      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${escapeHtml(String(v))}</div></div>`)
-      .join("");
+  function formatTime(iso) {
+    if (!iso) return { rel: "—", utc: "" };
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return { rel: String(iso), utc: "" };
+    const sec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+    const utc = d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    let rel = `${sec}s ago`;
+    if (sec >= 60 && sec < 3600) rel = `${Math.round(sec / 60)}m ago`;
+    else if (sec >= 3600 && sec < 86400) rel = `${Math.round(sec / 3600)}h ago`;
+    else if (sec >= 86400) rel = `${Math.round(sec / 86400)}d ago`;
+    return { rel, utc };
   }
 
   function statusTone(row) {
@@ -157,42 +79,227 @@
     return "muted";
   }
 
-  function formatTime(iso) {
-    if (!iso) return { rel: "—", utc: "" };
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return { rel: String(iso), utc: "" };
-    const delta = Date.now() - d.getTime();
-    const utc = d.toISOString().replace("T", " ").slice(0, 19) + " UTC";
-    const sec = Math.max(0, Math.round(delta / 1000));
-    let rel = `${sec}s ago`;
-    if (sec >= 60 && sec < 3600) rel = `${Math.round(sec / 60)}m ago`;
-    else if (sec >= 3600 && sec < 86400) rel = `${Math.round(sec / 3600)}h ago`;
-    else if (sec >= 86400) rel = `${Math.round(sec / 86400)}d ago`;
-    return { rel, utc };
+  function spendDelta(current, prior) {
+    const a = Number(String(current || "0").replace("$", ""));
+    const b = Number(String(prior || "0").replace("$", ""));
+    if (!b && !a) return { cls: "", text: "" };
+    if (!b) return { cls: "warn", text: "new" };
+    const change = ((a - b) / b) * 100;
+    const cls = change > 8 ? "warn" : change < -8 ? "ok" : "";
+    const arrow = change >= 0 ? "▲" : "▼";
+    return { cls, text: `${arrow} ${Math.abs(change).toFixed(0)}%` };
   }
 
-  function formatTokens(row) {
-    const p = row.prompt_tokens || 0;
-    const c = row.completion_tokens || 0;
-    if (!p && !c) return "—";
-    return `${p} → ${c}`;
+  function renderHeader(data) {
+    const s = data.summary || {};
+    const health = data.health || {};
+    const checks = health.checks || {};
+    const mode = health.provider_mode || "live";
+    el("env-chip").textContent = mode === "mocks" ? "Mocks" : "Production";
+    const healthy = s.providers_healthy ?? 0;
+    const total = s.providers_total ?? 0;
+    const open = s.providers_open ?? 0;
+    const half = s.providers_half ?? 0;
+    el("header-pills").innerHTML = [
+      `<span class="pill-dot ok"><i></i>${healthy}/${total} healthy</span>`,
+      `<span class="pill-dot bad"><i></i>${open} failing</span>`,
+      `<span class="pill-dot warn"><i></i>${half} stuck</span>`,
+      `<span class="pill-dot"><i></i>24h spend ${escapeHtml(money(s.spend_24h_usd))}</span>`,
+      `<span class="pill-dot"><i></i>success ${escapeHtml(pct(s.success_rate_24h))}</span>`,
+      `<span class="pill-dot ${checks.postgres === "up" && checks.redis === "up" ? "ok" : "bad"}"><i></i>${checks.postgres === "up" && checks.redis === "up" ? "deps up" : "deps down"}</span>`,
+    ].join("");
   }
 
-  function flagPills(row) {
-    const pills = [];
-    if (row.cache === "hit") pills.push(`<span class="pill hit">${escapeHtml(row.detail || "hit")}</span>`);
-    if (row.fallback) pills.push(`<span class="pill warn">fallback</span>`);
-    if (row.stream) pills.push(`<span class="pill">stream</span>`);
-    if (row.cost_estimated) pills.push(`<span class="pill warn">est.</span>`);
-    if (row.retries) pills.push(`<span class="pill">r×${row.retries}</span>`);
-    return pills.length ? `<div class="pills">${pills.join("")}</div>` : `<span class="muted">—</span>`;
+  function renderMetrics(data) {
+    const s = data.summary || {};
+    const healthy = s.providers_healthy ?? 0;
+    const total = s.providers_total ?? 0;
+    const open = s.providers_open ?? 0;
+    const half = s.providers_half ?? 0;
+    el("m-healthy").textContent = `${healthy} / ${total}`;
+    const hDelta = el("m-healthy-delta");
+    hDelta.className = "delta " + (open ? "bad" : half ? "warn" : "ok");
+    hDelta.textContent = open ? "failing" : half ? "probing" : "▲ stable";
+    el("m-healthy-sub").innerHTML = `<span class="pill-dot bad"><i></i></span> `.repeat(open) + `<span class="pill-dot warn"><i></i></span>`.repeat(half);
+
+    el("m-spend").textContent = money(s.spend_24h_usd);
+    const d = spendDelta(s.spend_24h_usd, s.spend_prior_usd);
+    const spendDeltaEl = el("m-spend-delta");
+    spendDeltaEl.className = "delta " + d.cls;
+    spendDeltaEl.textContent = d.text;
+    el("m-spend-sub").textContent = `vs ${money(s.spend_prior_usd)} prior 24h`;
+
+    const incidents = s.open_incidents ?? 0;
+    el("m-incidents").textContent = String(incidents);
+    const iDelta = el("m-incidents-delta");
+    iDelta.className = "delta " + (incidents ? "bad" : "ok");
+    iDelta.textContent = incidents ? "▲ open" : "clear";
+  }
+
+  function renderSuccess(data) {
+    const s = data.summary || {};
+    const ok = s.ok_24h || 0;
+    const err = s.errors_24h || 0;
+    const rej = s.rejected_24h || 0;
+    const total = s.runs_24h || 0;
+    el("success-v").textContent = total ? pct(s.success_rate_24h) : "—";
+    const delta = el("success-delta");
+    const prior = s.success_rate_prior || 0;
+    const curr = s.success_rate_24h || 0;
+    if (!total) {
+      delta.className = "delta";
+      delta.textContent = "no traffic";
+    } else if (prior && curr + 0.01 < prior) {
+      delta.className = "delta bad";
+      delta.textContent = "▼ Degrading";
+    } else {
+      delta.className = "delta ok";
+      delta.textContent = "▲ stable";
+    }
+    el("success-hint").textContent = `Completed runs / total runs · ${fmtInt(total)} runs`;
+    const okPct = total ? (ok / total) * 100 : 0;
+    const errPct = total ? (err / total) * 100 : 0;
+    const rejPct = total ? (rej / total) * 100 : 0;
+    el("bar-ok").style.width = okPct + "%";
+    el("bar-bad").style.width = errPct + "%";
+    el("bar-warn").style.width = rejPct + "%";
+    el("bar-legend").innerHTML = `
+      <span>${fmtInt(ok)} succeeded</span>
+      <span>${fmtInt(err)} failed</span>
+      <span>${fmtInt(rej)} rejected</span>`;
+    const note = el("success-note");
+    if (!total) {
+      note.className = "callout";
+      note.textContent = "No requests in the last 24 hours yet.";
+    } else if (err) {
+      note.className = "callout bad";
+      note.textContent = `${fmtInt(err)} upstream/gateway errors in 24h. Open the request log for route reason and detail.`;
+    } else if (rej) {
+      note.className = "callout";
+      note.textContent = `${fmtInt(rej)} admits were rejected by RPM, TPM, budget, or allowlist.`;
+    } else {
+      note.className = "callout ok";
+      note.textContent = "Success is holding. Cache hit rate " + pct(s.cache_hit_rate) + " this process.";
+    }
+  }
+
+  function renderRunMix(data) {
+    const rows = data.run_mix || [];
+    el("run-mix").innerHTML = rows
+      .map((r) => `<tr>
+        <td><span class="state ${escapeHtml(r.tone || "")}"><i></i>${escapeHtml(r.label)}</span></td>
+        <td>${fmtInt(r.providers)}</td>
+        <td>${fmtInt(r.runs)}</td>
+        <td>${fmtMs(r.latency_ms)}</td>
+        <td>${escapeHtml(money(r.cost_usd))}</td>
+      </tr>`)
+      .join("");
+  }
+
+  function renderAttention(data) {
+    const items = data.attention || [];
+    el("attention-list").innerHTML = items
+      .map((item, i) => {
+        const tone = item.tone === "warning" ? "warn" : item.tone === "success" ? "success" : "";
+        const cta = item.href
+          ? `<a class="${tone}" href="${escapeHtml(item.href)}">${item.tone === "success" ? "View providers" : "Open details"} →</a>`
+          : "";
+        return `<li>
+          <div class="n">${String(i + 1).padStart(2, "0")}</div>
+          <div>
+            <div class="t">${escapeHtml(item.title)}</div>
+            <p class="b">${escapeHtml(item.body)}</p>
+            ${cta}
+          </div>
+        </li>`;
+      })
+      .join("");
+  }
+
+  function renderChart(series) {
+    const root = el("chart");
+    const points = series || [];
+    if (!points.length) {
+      root.innerHTML = `<p class="hint">No spend yet in this window.</p>`;
+      return;
+    }
+    const w = 640;
+    const h = 180;
+    const pad = { l: 8, r: 8, t: 12, b: 22 };
+    const max = Math.max(...points.map((p) => Number(p.cost_usd) || 0), 0.000001);
+    const innerW = w - pad.l - pad.r;
+    const innerH = h - pad.t - pad.b;
+    const coords = points.map((p, i) => {
+      const x = pad.l + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+      const y = pad.t + innerH - ((Number(p.cost_usd) || 0) / max) * innerH;
+      return { x, y, p };
+    });
+    const line = coords.map((c, i) => `${i ? "L" : "M"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+    const fill = `M${coords[0].x},${pad.t + innerH} ` +
+      coords.map((c) => `L${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ") +
+      ` L${coords[coords.length - 1].x},${pad.t + innerH} Z`;
+    const peak = coords.reduce((a, b) => (Number(b.p.cost_usd) > Number(a.p.cost_usd) ? b : a), coords[0]);
+    const peakLabel = new Date(peak.p.hour).toISOString().slice(11, 16) + " UTC";
+    root.innerHTML = `<div style="position:relative;height:180px">
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#8b7cf6" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#8b7cf6" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="${fill}" fill="url(#spendFill)"></path>
+        <path d="${line}" fill="none" stroke="#8b7cf6" stroke-width="2.2"></path>
+        <circle cx="${peak.x}" cy="${peak.y}" r="4" fill="#c4b5fd"></circle>
+      </svg>
+      <div class="chart-tip" style="left:${(peak.x / w) * 100}%;top:${(peak.y / h) * 100}%">${escapeHtml(peakLabel)} · ${escapeHtml(money(Number(peak.p.cost_usd).toFixed(4)))}</div>
+    </div>`;
+  }
+
+  function tenantBadge(t) {
+    const used = t.budget_used_frac || 0;
+    if (used >= 1) return { cls: "bad", text: "Over budget" };
+    if (used >= 0.8) return { cls: "warn", text: "Cost spike" };
+    if ((t.status || "") !== "active") return { cls: "warn", text: t.status };
+    return { cls: "ok", text: "Healthy" };
+  }
+
+  function renderTenants(data) {
+    const q = queryText();
+    let tenants = data.tenants || [];
+    if (q.includes("budget") || q.includes("exceed")) {
+      tenants = [...tenants].sort((a, b) => (b.budget_used_frac || 0) - (a.budget_used_frac || 0));
+    }
+    tenants = tenants.filter((t) => matchesQuery([t.team, t.status, t.spend_usd]));
+    if (!tenants.length) {
+      el("tenant-list").innerHTML = `<li class="hint">No tenants match.</li>`;
+      return;
+    }
+    el("tenant-list").innerHTML = tenants
+      .map((t) => {
+        const badge = tenantBadge(t);
+        const initial = String(t.team || "?").slice(0, 1).toUpperCase();
+        const used = Math.round((t.budget_used_frac || 0) * 100);
+        return `<li>
+          <div class="avatar">${escapeHtml(initial)}</div>
+          <div class="who">
+            <div class="name">${escapeHtml(t.team)}</div>
+            <div class="meta">${escapeHtml(money(t.spend_usd))} of $${Number(t.budget_usd || 0)} · ${used}% used · ${fmtInt(t.requests)} req</div>
+          </div>
+          <span class="badge ${badge.cls}">${escapeHtml(badge.text)}</span>
+        </li>`;
+      })
+      .join("");
   }
 
   function renderLogs(data) {
-    const rows = data.logs || [];
-    const tbody = el("logs");
+    const q = queryText();
+    const rows = (data.logs || []).filter((r) =>
+      matchesQuery([r.team, r.status, r.status_label, r.requested_model, r.resolved_provider, r.resolved_model, r.detail, r.route_reason])
+    );
+    const tbody = el("logs-body");
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td class="empty" colspan="8">No requests in this filter yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td class="empty" colspan="8">${q ? "No requests match that search." : "No requests in this filter yet."}</td></tr>`;
       return;
     }
     tbody.innerHTML = rows
@@ -201,27 +308,25 @@
         const tone = statusTone(r);
         const label = r.status_label || r.status || "unknown";
         const upstream = [r.resolved_provider, r.resolved_model].filter(Boolean).join("/") || "—";
-        const cost = r.cost_usd || "0";
+        const tokens = (r.prompt_tokens || r.completion_tokens)
+          ? `${r.prompt_tokens || 0} → ${r.completion_tokens || 0}`
+          : "—";
         const open = r.request_id && r.request_id === openLogId;
-        const detail = `
-          <tr class="log-detail-row"${open ? "" : " hidden"}>
-            <td colspan="8">
-              <div class="log-detail">
-                <div><div class="k">Request id</div><div class="v">${escapeHtml(r.request_id || "—")}</div></div>
-                <div><div class="k">Virtual key</div><div class="v">${escapeHtml(r.virtual_key || "—")}</div></div>
-                <div><div class="k">Route</div><div class="v">${escapeHtml(r.route_reason || "—")}</div></div>
-                <div><div class="k">Detail</div><div class="v">${escapeHtml(r.detail || "—")}</div></div>
-              </div>
-            </td>
-          </tr>`;
+        const detail = `<tr class="log-detail-row"${open ? "" : " hidden"}>
+          <td colspan="8"><div class="log-detail">
+            <div><div class="k">Request id</div><div class="v">${escapeHtml(r.request_id || "—")}</div></div>
+            <div><div class="k">Team</div><div class="v">${escapeHtml(r.team || "—")}</div></div>
+            <div><div class="k">Route</div><div class="v">${escapeHtml(r.route_reason || "—")}</div></div>
+            <div><div class="k">Detail</div><div class="v">${escapeHtml(r.detail || "—")}</div></div>
+          </div></td></tr>`;
         return `<tr class="log-row${open ? " open" : ""}" data-id="${escapeHtml(r.request_id || "")}">
           <td title="${escapeHtml(t.utc)}">${escapeHtml(t.rel)}</td>
+          <td>${escapeHtml(r.team || "—")}</td>
           <td><span class="badge ${tone}">${escapeHtml(label)}</span></td>
           <td><span class="trunc" title="${escapeHtml(r.requested_model || "")}">${escapeHtml(r.requested_model || "—")}</span></td>
-          <td><span class="trunc" title="${escapeHtml(upstream)}">${escapeHtml(upstream)}</span></td>
-          <td>${escapeHtml(formatTokens(r))}</td>
-          <td>${escapeHtml(cost)}${r.cost_estimated ? " est." : ""}</td>
-          <td>${flagPills(r)}</td>
+          <td><span class="trunc">${escapeHtml(upstream)}</span></td>
+          <td>${escapeHtml(tokens)}</td>
+          <td>${escapeHtml(money(r.cost_usd))}${r.cost_estimated ? " est." : ""}</td>
           <td>${r.latency_ms ?? 0}</td>
         </tr>${detail}`;
       })
@@ -243,76 +348,29 @@
     });
   }
 
-  function pct(n) {
-    if (typeof n !== "number" || Number.isNaN(n)) return "—";
-    return (n * 100).toFixed(1) + "%";
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;");
-  }
-
-  function stopPolling() {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = 0;
-    }
-  }
-
-  function startPolling() {
-    stopPolling();
-    pollTimer = setInterval(() => {
-      if (usableToken(currentToken())) loadAll();
-    }, 15000);
+  function renderAll(data) {
+    latest = data;
+    renderHeader(data);
+    renderMetrics(data);
+    renderSuccess(data);
+    renderRunMix(data);
+    renderAttention(data);
+    renderChart(data.spend_24h || []);
+    renderTenants(data);
+    renderLogs(data);
   }
 
   async function loadAll() {
-    const key = keyInput.value.trim();
-    localStorage.setItem(VK_KEY, key);
-
-    if (!usableToken(currentToken())) {
-      localStorage.removeItem(TOKEN_KEY);
-      setTokenInvalid(true);
-      showBanner();
-      renderLocked();
-      setStatus("Paste a real admin token to load the console.", true);
-      stopPolling();
-      tokenInput.focus();
-      return;
-    }
-
     setStatus("Loading…");
     try {
-      const logsQS = new URLSearchParams({ key, limit: "80" });
-      if (logFilter && logFilter !== "all") logsQS.set("status", logFilter);
-      const [providers, cache, usage, logs] = await Promise.all([
-        api("/admin/providers/health"),
-        api("/admin/cache/stats"),
-        api(`/admin/usage?key=${encodeURIComponent(key)}`),
-        api(`/admin/logs?${logsQS.toString()}`),
-      ]);
-      localStorage.setItem(TOKEN_KEY, currentToken());
-      setTokenInvalid(false);
-      hideBanner();
-      renderProviders(providers);
-      renderCache(cache);
-      renderUsage(usage);
-      renderLogs(logs);
+      const qs = new URLSearchParams();
+      if (logFilter && logFilter !== "all") qs.set("status", logFilter);
+      const res = await fetch(`/console/api/overview?${qs.toString()}`);
+      if (!res.ok) throw new Error(`Could not load overview (${res.status})`);
+      const data = await res.json();
+      renderAll(data);
       setStatus(`Updated ${new Date().toLocaleTimeString()}`);
-      startPolling();
     } catch (err) {
-      if (err.status === 401) {
-        localStorage.removeItem(TOKEN_KEY);
-        setTokenInvalid(true);
-        showBanner();
-        renderLocked();
-        stopPolling();
-        tokenInput.focus();
-      }
       setStatus(String(err.message || err), true);
     }
   }
@@ -327,23 +385,20 @@
     loadAll();
   });
 
-  el("auth-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    loadAll();
-  });
   el("refresh").addEventListener("click", () => loadAll());
-  el("toggle-token").addEventListener("click", () => {
-    const hidden = tokenInput.type === "password";
-    tokenInput.type = hidden ? "text" : "password";
-    el("toggle-token").textContent = hidden ? "Hide" : "Show";
+  searchInput.addEventListener("input", () => {
+    if (latest) {
+      renderTenants(latest);
+      renderLogs(latest);
+    }
+  });
+  window.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      searchInput.focus();
+    }
   });
 
-  renderLocked();
-  if (usableToken(currentToken())) {
-    loadAll();
-  } else {
-    showBanner();
-    setTokenInvalid(false);
-    setStatus("");
-  }
+  pollTimer = setInterval(loadAll, 15000);
+  loadAll();
 })();

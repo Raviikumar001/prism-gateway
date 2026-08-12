@@ -23,8 +23,7 @@ Public Railway URL:
 | Chat completions | `POST https://gateway-production-e22b.up.railway.app/v1/chat/completions` |
 | Ops console | https://gateway-production-e22b.up.railway.app/console/ |
 
-Demo virtual key: `prism-sk-research-4d5e6f`  
-Admin console token: value of `ADMIN_TOKEN` on the Railway service (local default `dev-admin-change-me`).
+Demo virtual key (API only): `prism-sk-research-4d5e6f`
 
 ### Try the API
 
@@ -40,15 +39,13 @@ curl -sS https://gateway-production-e22b.up.railway.app/v1/chat/completions \
 
 ### Open the ops console
 
-1. Open https://gateway-production-e22b.up.railway.app/console/ in a browser.
-2. Enter:
-   - **Admin token** — the Railway `ADMIN_TOKEN` (same as local `.env` if unchanged: `dev-admin-change-me`)
-   - **Virtual key** — e.g. `prism-sk-research-4d5e6f` or `prism-sk-search-1a2b3c`
-3. Click **Load**.
+Open https://gateway-production-e22b.up.railway.app/console/ — it loads on its own. No admin token or virtual key.
 
-You’ll see provider/breaker health, cache stats, usage for that key, and recent request logs (route reason, retries, cost, latency). Use **Refresh** to reload.
+You’ll see provider health, 24h spend, success rate, tenant budgets (team names only), and recent requests. Use **Refresh** or wait for the 15s auto-update.
 
-Local console is the same flow at `http://localhost:8080/console/` after `docker compose up`.
+Local console: `http://localhost:8080/console/` after `docker compose up`.
+
+Programmatic admin APIs (`/admin/*`) still require `Authorization: Bearer <ADMIN_TOKEN>`. Chat completions still require a virtual key.
 
 ## Features
 
@@ -90,7 +87,7 @@ docker compose up --build
 
 Gateway: `http://localhost:8080`  
 Health: `GET /health` (checks Postgres + Redis)  
-Ops console: `http://localhost:8080/console/` (enter `ADMIN_TOKEN`)
+Ops console: `http://localhost:8080/console/`
 
 ```bash
 curl -s http://localhost:8080/health
@@ -199,7 +196,8 @@ python3 scripts/coding_agent_test.py \
 | `GET` | `/admin/logs?key=&limit=` | admin token |
 | `GET` | `/admin/cache/stats` | admin token |
 | `GET` | `/admin/providers/health` | admin token |
-| `GET` | `/console/` | HTML UI (APIs still need admin token) |
+| `GET` | `/console/` | HTML UI (no token) |
+| `GET` | `/console/api/overview` | Public read-only dashboard JSON |
 
 `from` / `to` accept `YYYY-MM-DD`, `YYYYMM`, or RFC3339. When omitted, usage defaults to the current UTC calendar month. The response includes `from`, `to`, `month`, aggregated token/cost totals, and `cache_hits`. Logs include `route_reason` and `retries`.
 
@@ -224,7 +222,7 @@ Environment (see `.env.example`):
 | `PORT` | Listen port (Railway injects this) |
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string |
-| `ADMIN_TOKEN` | Admin / console auth |
+| `ADMIN_TOKEN` | Admin API auth (`/admin/*`) |
 | `SEED_ON_BOOT` | Seed demo tenants/prices on startup (`true` by default) |
 | `UPSTREAM_TIMEOUT` | Non-stream timeout and stream inactivity timeout (`120s`) |
 | `PROVIDER_MODE` | `mocks` (default) or `live` |

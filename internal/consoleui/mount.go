@@ -17,9 +17,12 @@ func Mount(r chi.Router) {
 	if err != nil {
 		panic(err)
 	}
-	fileServer := http.FileServer(http.FS(sub))
+	fileServer := http.StripPrefix("/console/", http.FileServer(http.FS(sub)))
 	r.Get("/console", func(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, "/console/", http.StatusFound)
 	})
-	r.Handle("/console/*", http.StripPrefix("/console/", fileServer))
+	r.Handle("/console/*", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		fileServer.ServeHTTP(w, req)
+	}))
 }

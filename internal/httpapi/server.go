@@ -72,6 +72,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/v1/models/*", s.handleModel)
 	r.Post("/v1/chat/completions", s.handleChatCompletions)
 	s.mountAdmin(r)
+	// Public read-only console API. Register before the /console/* file server.
+	r.Get("/console/api/overview", s.handleConsoleOverview)
 	consoleui.Mount(r)
 
 	return r
