@@ -12,6 +12,8 @@ OpenCode is configured with a **variety of OpenRouter + Cerebras models** throug
 |---|---|
 | `openai/gpt-5.6-luna` | Default — strong & cheap |
 | `openai/gpt-5.6-luna-pro` | Stronger Luna |
+| `openai/gpt-5.6-sol` / `sol` | GPT-5.6 Sol flagship |
+| `anthropic/claude-fable-5` / `fable` | Claude Fable 5 |
 | `openai/gpt-5.4` / `gpt-5.4-mini` | OpenAI 5.4 family |
 | `openai/gpt-4o` / `gpt-4o-mini` | Classic OpenAI |
 | `anthropic/claude-sonnet-5` / `claude-haiku-4.5` | Anthropic |
@@ -20,7 +22,7 @@ OpenCode is configured with a **variety of OpenRouter + Cerebras models** throug
 | `mistralai/codestral-2508` | Codestral |
 | `deepseek/deepseek-v4-flash` | DeepSeek |
 | `zai-glm-4.7` | Cerebras GLM |
-| `fast` / `smart` / `code` / `auto` | Prism aliases |
+| `fast` / `smart` / `code` / `sol` / `fable` / `auto` | Prism aliases |
 
 ## Launch
 

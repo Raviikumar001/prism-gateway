@@ -84,6 +84,18 @@ func TestLoadLiveConfig(t *testing.T) {
 	if _, ok := cfg.ProviderForModel("mistralai/mistral-nemo"); !ok {
 		t.Fatal("openrouter mistral not mapped")
 	}
+	if _, ok := cfg.ProviderForModel("openai/gpt-5.6-sol"); !ok {
+		t.Fatal("openrouter sol not mapped")
+	}
+	if _, ok := cfg.ProviderForModel("anthropic/claude-fable-5"); !ok {
+		t.Fatal("openrouter fable not mapped")
+	}
+	if cfg.Aliases["sol"].Primary != "openai/gpt-5.6-sol" {
+		t.Fatalf("sol alias = %+v", cfg.Aliases["sol"])
+	}
+	if cfg.Aliases["fable"].Primary != "anthropic/claude-fable-5" {
+		t.Fatalf("fable alias = %+v", cfg.Aliases["fable"])
+	}
 }
 
 func TestValidateRejectsUnreachableFallback(t *testing.T) {

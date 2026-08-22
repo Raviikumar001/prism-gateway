@@ -51,7 +51,7 @@ Programmatic admin APIs (`/admin/*`) still require `Authorization: Bearer <ADMIN
 
 - **OpenAI Chat Completions API** — `POST /v1/chat/completions`, streaming and non-streaming
 - **Virtual keys** — per-tenant allowlists, RPM limits, monthly spend caps with **pre-dispatch budget reservation**
-- **Model aliases** — `fast`, `smart`, and `auto` (feature-weighted difficulty routing)
+- **Model aliases** — `fast`, `smart`, `code`, `sol`, `fable`, and `auto` (feature-weighted difficulty routing)
 - **Failover** — timeouts, retries with full jitter, ordered fallbacks, per-provider circuit breakers
 - **Semantic cache** — exact-match then embedding similarity, scoped per key
 - **Metering** — cost from upstream token usage and a price table; async request logs; usage API
@@ -124,9 +124,11 @@ With `PROVIDER_MODE=live` and no `GATEWAY_CONFIG` override, Prism loads `data/ga
 | `fast` | OpenRouter `openai/gpt-5.6-luna` | GPT-4o mini → Mistral Nemo → Cerebras Gemma |
 | `smart` | OpenRouter `openai/gpt-5.6-luna-pro` | GPT-5.4 → Claude Sonnet 5 → Cerebras `zai-glm-4.7` → Qwen3 Coder Plus |
 | `code` | OpenRouter `qwen/qwen3-coder` | Codestral → Luna → DeepSeek V4 Flash |
+| `sol` | OpenRouter `openai/gpt-5.6-sol` | Luna Pro → Claude Sonnet 5 |
+| `fable` | OpenRouter `anthropic/claude-fable-5` | Claude Opus 4.8 → GPT-5.6 Sol |
 | `auto` | difficulty → `fast` (simple) / `smart` (complex) | same chains as above |
 
-Live catalog also exposes direct model IDs (OpenAI GPT-4.1/5.4/Luna, Claude, Gemini, DeepSeek, Qwen coder, Cerebras GLM, …) for keys with `*` allowlist.
+Live catalog also exposes direct model IDs (OpenAI GPT-4.1/5.4/Luna/Sol, Claude Fable, Gemini, DeepSeek, Qwen coder, Cerebras GLM, …) for keys with `*` allowlist.
 
 Live OpenRouter base URL: `https://openrouter.ai/api/v1`. We do **not** expose the full OpenRouter catalog — a curated mix of 18 active models covering cheap OSS plus Google / OpenAI / Anthropic. Research key allowlist includes `*` so those model IDs can be requested directly. Archived and scheduled-for-deprecation models are excluded.
 
@@ -165,7 +167,7 @@ OpenAI-compatible Chat Completions base URL can use:
 ```
 base_url = http://localhost:8080/v1
 api_key  = prism-sk-research-4d5e6f
-model    = openai/gpt-4.1-mini  # or fast / smart / auto
+model    = openai/gpt-4.1-mini  # or fast / smart / sol / fable / auto
 ```
 
 Tool-using and multi-turn requests bypass the semantic response cache so stale
