@@ -96,6 +96,12 @@ func TestLoadLiveConfig(t *testing.T) {
 	if cfg.Aliases["fable"].Primary != "anthropic/claude-fable-5" {
 		t.Fatalf("fable alias = %+v", cfg.Aliases["fable"])
 	}
+	if _, ok := cfg.ProviderForModel("z-ai/glm-5.3-flash"); !ok {
+		t.Fatal("openrouter glm-5.3-flash not mapped")
+	}
+	if cfg.Aliases["glm"].Primary != "z-ai/glm-5.3-flash" {
+		t.Fatalf("glm alias = %+v", cfg.Aliases["glm"])
+	}
 }
 
 func TestValidateRejectsUnreachableFallback(t *testing.T) {

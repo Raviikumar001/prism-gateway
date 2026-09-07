@@ -8,6 +8,7 @@
   "gemma-4-31b": { "input_per_1m": 2.15, "output_per_1m": 2.70 },
   "gpt-oss-120b": { "input_per_1m": 0.35, "output_per_1m": 0.75 },
   "zai-glm-4.7": { "input_per_1m": 0.60, "output_per_1m": 1.20 },
+  "z-ai/glm-5.3-flash": { "input_per_1m": 0.075, "output_per_1m": 0.25 },
 
   "mistralai/mistral-nemo": { "input_per_1m": 0.019, "output_per_1m": 0.03 },
   "mistralai/mistral-small-3.1-24b-instruct": { "input_per_1m": 0.351, "output_per_1m": 0.555 },

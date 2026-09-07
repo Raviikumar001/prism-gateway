@@ -21,8 +21,9 @@ OpenCode is configured with a **variety of OpenRouter + Cerebras models** throug
 | `qwen/qwen3-coder` / `qwen3-coder-plus` | Coding specialists |
 | `mistralai/codestral-2508` | Codestral |
 | `deepseek/deepseek-v4-flash` | DeepSeek |
-| `zai-glm-4.7` | Cerebras GLM |
-| `fast` / `smart` / `code` / `sol` / `fable` / `auto` | Prism aliases |
+| `zai-glm-4.7` | Cerebras GLM 4.7 |
+| `z-ai/glm-5.3-flash` / `glm` | GLM 5.3 Flash |
+| `fast` / `smart` / `code` / `sol` / `fable` / `glm` / `auto` | Prism aliases |
 
 ## Launch
 

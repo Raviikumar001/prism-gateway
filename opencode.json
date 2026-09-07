@@ -83,6 +83,14 @@
           "name": "Cerebras ZAI GLM 4.7",
           "limit": { "context": 65536, "output": 8192 }
         },
+        "z-ai/glm-5.3-flash": {
+          "name": "GLM 5.3 Flash",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "glm": {
+          "name": "Prism GLM (→ GLM 5.3 Flash)",
+          "limit": { "context": 200000, "output": 16384 }
+        },
         "fast": {
           "name": "Prism Fast (→ Luna)",
           "limit": { "context": 200000, "output": 8192 }

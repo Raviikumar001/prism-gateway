@@ -1,5 +1,5 @@
 {
-  "_comment": "Live providers: Cerebras (incl. zai-glm) + OpenRouter mix — OpenAI Luna/Sol/GPT, Claude Fable, Gemini, DeepSeek, Qwen coder.",
+  "_comment": "Live providers: Cerebras (incl. zai-glm) + OpenRouter mix — OpenAI Luna/Sol/GPT, Claude Fable, GLM 5.3 Flash, Gemini, DeepSeek, Qwen coder.",
   "providers": [
     {
       "name": "cerebras",
@@ -45,7 +45,8 @@
         "mistralai/codestral-2508",
         "qwen/qwen3-coder-flash",
         "qwen/qwen3-coder",
-        "qwen/qwen3-coder-plus"
+        "qwen/qwen3-coder-plus",
+        "z-ai/glm-5.3-flash"
       ],
       "extra_headers": {
         "HTTP-Referer": "https://github.com/Raviikumar001/prism-gateway",
@@ -91,6 +92,13 @@
       "fallbacks": [
         "anthropic/claude-opus-4.8",
         "openai/gpt-5.6-sol"
+      ]
+    },
+    "glm": {
+      "primary": "z-ai/glm-5.3-flash",
+      "fallbacks": [
+        "zai-glm-4.7",
+        "qwen/qwen3-coder-flash"
       ]
     },
     "auto": {
